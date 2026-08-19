@@ -42,6 +42,35 @@ def create_features(df: pd.DataFrame) -> pd.DataFrame:
         - 1
     )
 
+    high_low = df["High"] - df["Low"]
+
+    high_close = (
+        df["High"] -
+        df["Close"].shift(1)
+    ).abs()
+
+    low_close = (
+        df["Low"] -
+        df["Close"].shift(1)
+    ).abs()
+
+    true_range = pd.concat(
+        [
+            high_low,
+            high_close,
+            low_close
+        ],
+        axis=1
+    ).max(axis=1)
+
+    df["ATR_14"] = (
+        true_range
+        .rolling(14)
+        .mean()
+    )
+
+
+
     df["Volume_Change"] = (
         df["Volume"].pct_change()
     )
