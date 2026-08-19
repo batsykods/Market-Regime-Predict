@@ -77,6 +77,8 @@ def main():
 
     print("\nRegime Statistics:")
     print(statistics)
+    print("\nTransition Matrix:")
+    print(model.transmat_)
 
     df.to_csv(OUTPUT_PATH, index=False)
 
