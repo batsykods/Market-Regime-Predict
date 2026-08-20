@@ -156,3 +156,26 @@ def walk_forward(df):
         predictions,
         ignore_index=True
     )
+if __name__ == "__main__":
+
+    df = pd.read_csv(
+        "data/processed/nifty50_signal_data.csv"
+    )
+
+    df = df.replace(
+        [np.inf, -np.inf],
+        np.nan
+    )
+
+    df = df.dropna().reset_index(drop=True)
+
+    results = walk_forward(df)
+
+    results.to_csv(
+        "data/processed/walk_forward_predictions.csv",
+        index=False
+    )
+
+    print(
+        "Saved walk-forward predictions."
+    )

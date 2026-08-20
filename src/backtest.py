@@ -1,30 +1,18 @@
-import joblib
 import pandas as pd
 import numpy as np
 
+from src.performance import calculate_metrics
 
-DATA_PATH = "data/processed/nifty50_signal_data.csv"
-MODEL_PATH = "data/models/xgboost_signal_model.pkl"
 
-FEATURES = [
-    "Log_Return",
-    "Volatility_20",
-    "SMA_20",
-    "SMA_50",
-    "Momentum_20",
-    "Volume_Change",
-    "Drawdown",
-    "Regime"
-]
+DATA_PATH = "data/processed/walk_forward_predictions.csv"
 
 TRANSACTION_COST = 0.001
+CONFIDENCE_THRESHOLD = 0.60
 
 
 def main():
 
     df = pd.read_csv(DATA_PATH)
-
-    model = joblib.load(MODEL_PATH)
 
     df["Date"] = pd.to_datetime(df["Date"])
 
@@ -34,62 +22,65 @@ def main():
     )
 
     df = df.dropna(
-        subset=FEATURES
+        subset=[
+            "Prediction",
+            "Probability",
+            "Future_Return"
+        ]
     ).reset_index(drop=True)
 
-    # Model prediction
-    df["Prediction"] = model.predict(
-        df[FEATURES]
-    )
-
-    # Convert prediction into position
-    # BUY  = +1
-    # HOLD =  0
-    # SELL = -1
+    # -------------------------
+    # Generate position
+    # -------------------------
 
     df["Position"] = 0
 
-    df.loc[
-        df["Prediction"] == 1,
-        "Position"
-    ] = 1
-
-    df.loc[
-        df["Prediction"] == 2,
-        "Position"
-    ] = -1
-
-    # Tomorrow's return
-    df["Future_Return"] = (
-        df["Close"].shift(-1) /
-        df["Close"]
-        - 1
+    strong_buy = (
+        (df["Prediction"] == 1) &
+        (df["Probability"] >= CONFIDENCE_THRESHOLD)
     )
 
+    strong_sell = (
+        (df["Prediction"] == 2) &
+        (df["Probability"] >= CONFIDENCE_THRESHOLD)
+    )
+
+    df.loc[strong_buy, "Position"] = 1
+    df.loc[strong_sell, "Position"] = -1
+
+    # -------------------------
     # Strategy return
+    # -------------------------
+
     df["Strategy_Return"] = (
         df["Position"] *
         df["Future_Return"]
     )
 
-    # Position changes
+    # -------------------------
+    # Transaction costs
+    # -------------------------
+
     df["Trade"] = (
         df["Position"]
         .diff()
         .abs()
+        .fillna(0)
     )
 
-    # Transaction costs
-    df["Strategy_Return"] -= (
+    df["Transaction_Cost"] = (
         df["Trade"] *
         TRANSACTION_COST
     )
 
-    df = df.dropna(
-        subset=["Strategy_Return"]
+    df["Strategy_Return"] -= (
+        df["Transaction_Cost"]
     )
 
+    # -------------------------
     # Equity curves
+    # -------------------------
+
     df["Strategy_Equity"] = (
         1 + df["Strategy_Return"]
     ).cumprod()
@@ -98,67 +89,44 @@ def main():
         1 + df["Future_Return"]
     ).cumprod()
 
-    # Performance
-    strategy_return = (
-        df["Strategy_Equity"].iloc[-1] - 1
-    )
+    # -------------------------
+    # Metrics
+    # -------------------------
 
-    buyhold_return = (
+    metrics = calculate_metrics(df)
+
+    buy_hold_return = (
         df["BuyHold_Equity"].iloc[-1] - 1
     )
 
-    volatility = (
-        df["Strategy_Return"].std()
-        * np.sqrt(252)
-    )
+    print("\nFINAL BACKTEST")
+    print("=" * 45)
 
-    sharpe = (
-        df["Strategy_Return"].mean()
-        / df["Strategy_Return"].std()
-        * np.sqrt(252)
-    )
+    for name, value in metrics.items():
 
-    cumulative = df["Strategy_Equity"]
+        if name == "Sharpe":
+            print(f"{name}: {value:.2f}")
 
-    drawdown = (
-        cumulative /
-        cumulative.cummax()
-        - 1
-    )
-
-    max_drawdown = drawdown.min()
-
-    print("\nBACKTEST RESULTS")
-    print("=" * 40)
+        else:
+            print(f"{name}: {value:.2%}")
 
     print(
-        f"Strategy Return: "
-        f"{strategy_return:.2%}"
+        f"Buy & Hold: {buy_hold_return:.2%}"
     )
 
     print(
-        f"Buy & Hold Return: "
-        f"{buyhold_return:.2%}"
+        f"Trades: {int((df['Trade'] > 0).sum())}"
+    )
+
+    # Save results
+    df.to_csv(
+        "data/processed/backtest_results.csv",
+        index=False
     )
 
     print(
-        f"Annualised Volatility: "
-        f"{volatility:.2%}"
-    )
-
-    print(
-        f"Sharpe Ratio: "
-        f"{sharpe:.2f}"
-    )
-
-    print(
-        f"Maximum Drawdown: "
-        f"{max_drawdown:.2%}"
-    )
-
-    print(
-        f"Number of Trades: "
-        f"{int((df['Trade'] > 0).sum())}"
+        "\nSaved:"
+        "\ndata/processed/backtest_results.csv"
     )
 
 
