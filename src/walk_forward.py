@@ -1,10 +1,11 @@
-import pandas as pd
+import os
 import numpy as np
-
-from hmmlearn.hmm import GaussianHMM
-from sklearn.preprocessing import StandardScaler
+import pandas as pd
 from xgboost import XGBClassifier
 
+
+INPUT_PATH = "data/processed/walk_forward_regimes.csv"
+OUTPUT_PATH = "data/processed/walk_forward_results.csv"
 
 FEATURES = [
     "Log_Return",
@@ -14,72 +15,82 @@ FEATURES = [
     "Momentum_20",
     "Volume_Change",
     "Drawdown",
+    "Regime"
 ]
 
+TARGET = "Target"
 
-def train_hmm(train):
+BUY_THRESHOLD = 0.005
+SELL_THRESHOLD = -0.005
 
-    X = train[
-        [
-            "Log_Return",
-            "Volatility_20",
-            "Momentum_20"
-        ]
-    ]
 
-    scaler = StandardScaler()
+def clean_data(df):
 
-    X_scaled = scaler.fit_transform(X)
+    # Convert features to numeric
+    for column in FEATURES:
+        df[column] = pd.to_numeric(
+            df[column],
+            errors="coerce"
+        )
 
-    hmm = GaussianHMM(
-        n_components=3,
-        covariance_type="full",
-        n_iter=1000,
-        random_state=42
+    df[TARGET] = pd.to_numeric(
+        df[TARGET],
+        errors="coerce"
     )
 
-    hmm.fit(X_scaled)
-
-    train = train.copy()
-
-    train["Regime"] = hmm.predict(
-        X_scaled
+    # Replace infinity values
+    df = df.replace(
+        [np.inf, -np.inf],
+        np.nan
     )
 
-    return hmm, scaler, train
+    # Remove invalid rows
+    df = df.dropna(
+        subset=FEATURES + [TARGET]
+    )
+
+    df = df.reset_index(drop=True)
+
+    df[TARGET] = df[TARGET].astype(int)
+
+    return df
 
 
-def add_regime(
-    model,
-    scaler,
-    df
-):
+def create_target(df):
 
-    X = df[
-        [
-            "Log_Return",
-            "Volatility_20",
-            "Momentum_20"
-        ]
-    ]
+    # Tomorrow's return
+    df["Future_Return"] = (
+        df["Close"].shift(-1) / df["Close"]
+    ) - 1
 
-    X_scaled = scaler.transform(X)
+    # 0 = HOLD
+    # 1 = BUY
+    # 2 = SELL
 
-    df = df.copy()
+    df["Target"] = 0
 
-    df["Regime"] = model.predict(
-        X_scaled
+    df.loc[
+        df["Future_Return"] > BUY_THRESHOLD,
+        "Target"
+    ] = 1
+
+    df.loc[
+        df["Future_Return"] < SELL_THRESHOLD,
+        "Target"
+    ] = 2
+
+    # Last row has no future return
+    df = df.dropna(
+        subset=["Future_Return"]
     )
 
     return df
 
 
-def train_xgboost(train):
+def train_model(X_train, y_train):
 
-    features = FEATURES + ["Regime"]
-
-    X = train[features]
-    y = train["Target"]
+    X_train = X_train.astype(float)
+    y_train = y_train.astype(int)
 
     model = XGBClassifier(
         n_estimators=300,
@@ -93,89 +104,207 @@ def train_xgboost(train):
         random_state=42
     )
 
-    model.fit(X, y)
+    model.fit(
+        X_train,
+        y_train
+    )
 
     return model
 
-def walk_forward(df):
 
-    predictions = []
+def main():
 
-    initial_train = 1000
+    print("Loading walk-forward regime data...")
 
-    test_size = 50
+    df = pd.read_csv(INPUT_PATH)
 
-    for start in range(
-        initial_train,
-        len(df),
-        test_size
-    ):
-
-        train = df.iloc[:start].copy()
-
-        test = df.iloc[
-            start:start + test_size
-        ].copy()
-
-        if len(test) == 0:
-            break
-
-        # HMM
-        hmm, scaler, train = train_hmm(
-            train
-        )
-
-        test = add_regime(
-            hmm,
-            scaler,
-            test
-        )
-
-        # XGBoost
-        model = train_xgboost(
-            train
-        )
-
-        features = FEATURES + [
-            "Regime"
-        ]
-
-        test["Prediction"] = model.predict(
-            test[features]
-        )
-
-        test["Probability"] = (
-            model.predict_proba(
-                test[features]
-            ).max(axis=1)
-        )
-
-        predictions.append(test)
-
-    return pd.concat(
-        predictions,
-        ignore_index=True
-    )
-if __name__ == "__main__":
-
-    df = pd.read_csv(
-        "data/processed/nifty50_signal_data.csv"
+    df["Date"] = pd.to_datetime(
+        df["Date"]
     )
 
-    df = df.replace(
-        [np.inf, -np.inf],
-        np.nan
+    df = df.sort_values(
+        "Date"
+    ).reset_index(drop=True)
+
+    print(
+        f"Raw rows: {len(df)}"
     )
 
-    df = df.dropna().reset_index(drop=True)
+    # Create BUY/HOLD/SELL target
+    df = create_target(df)
 
-    results = walk_forward(df)
+    print(
+        f"Rows after target creation: "
+        f"{len(df)}"
+    )
 
-    results.to_csv(
-        "data/processed/walk_forward_predictions.csv",
-        index=False
+    # Clean features
+    df = clean_data(df)
+
+    print(
+        f"Clean rows: {len(df)}"
+    )
+
+    # Initial historical training period
+    initial_train_size = int(
+        len(df) * 0.70
+    )
+
+    total_predictions = (
+        len(df) - initial_train_size
     )
 
     print(
-        "Saved walk-forward predictions."
+        f"Initial training size: "
+        f"{initial_train_size}"
     )
+
+    print(
+        f"Walk-forward predictions: "
+        f"{total_predictions}"
+    )
+
+    predictions = []
+
+    for i in range(
+        initial_train_size,
+        len(df)
+    ):
+
+        # ONLY historical data
+        train = df.iloc[:i]
+
+        # Current unseen observation
+        test = df.iloc[[i]]
+
+        X_train = (
+            train[FEATURES]
+            .astype(float)
+        )
+
+        y_train = (
+            train[TARGET]
+            .astype(int)
+        )
+
+        X_test = (
+            test[FEATURES]
+            .astype(float)
+        )
+
+        # Safety checks
+        if X_train.isnull().values.any():
+            raise ValueError(
+                "NaN detected in X_train."
+            )
+
+        if X_test.isnull().values.any():
+            raise ValueError(
+                "NaN detected in X_test."
+            )
+
+        # Train using historical data only
+        model = train_model(
+            X_train,
+            y_train
+        )
+
+        # Predict unseen observation
+        prediction = model.predict(
+            X_test
+        )[0]
+
+        probabilities = model.predict_proba(
+            X_test
+        )[0]
+
+        predictions.append({
+
+            "Date":
+                test["Date"].iloc[0],
+
+            "Close":
+                test["Close"].iloc[0],
+
+            "Actual":
+                test[TARGET].iloc[0],
+
+            "Future_Return":
+                test["Future_Return"].iloc[0],
+
+            "Prediction":
+                prediction,
+
+            "HOLD_Probability":
+                probabilities[0],
+
+            "BUY_Probability":
+                probabilities[1],
+
+            "SELL_Probability":
+                probabilities[2],
+
+            "Regime":
+                test["Regime"].iloc[0]
+        })
+
+        completed = (
+            i - initial_train_size + 1
+        )
+
+        if completed % 25 == 0:
+
+            print(
+                f"Processed "
+                f"{completed}/"
+                f"{total_predictions}"
+            )
+
+    results = pd.DataFrame(
+        predictions
+    )
+
+    os.makedirs(
+        "data/processed",
+        exist_ok=True
+    )
+
+    results.to_csv(
+        OUTPUT_PATH,
+        index=False
+    )
+
+    print("\n" + "=" * 60)
+    print(
+        "WALK-FORWARD XGBOOST COMPLETE"
+    )
+    print("=" * 60)
+
+    print(
+        f"Saved to: {OUTPUT_PATH}"
+    )
+
+    print(
+        f"Predictions generated: "
+        f"{len(results)}"
+    )
+
+    print("\nPrediction distribution:")
+
+    print(
+        results["Prediction"]
+        .value_counts()
+        .sort_index()
+    )
+
+    print("\nActual distribution:")
+
+    print(
+        results["Actual"]
+        .value_counts()
+        .sort_index()
+    )
+
+
+if __name__ == "__main__":
+    main()

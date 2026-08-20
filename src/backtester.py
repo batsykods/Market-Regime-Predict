@@ -74,7 +74,7 @@ def calculate_returns(df):
 
     df["Market_Return"] = (
         df["Close"]
-        .pct_change()
+        .pct_change().fillna(0)
     )
 
     df["Strategy_Return"] = (
