@@ -23,7 +23,7 @@ Thumbs.db
 
 # Logs
 *.log
-*.isntruction
+*.isntruction.txt
 
 # Generated model files
 *.pkl
