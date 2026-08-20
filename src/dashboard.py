@@ -1,10 +1,14 @@
-import streamlit as st
 import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
+import streamlit as st
 
 
-DATA_PATH = "data/processed/nifty50_signal_data.csv"
+PREDICTIONS_PATH = (
+    "data/processed/walk_forward_results.csv"
+)
+
+BACKTEST_PATH = (
+    "data/processed/risk_adjusted_backtest.csv"
+)
 
 
 st.set_page_config(
@@ -13,347 +17,188 @@ st.set_page_config(
 )
 
 
-# -----------------------------
-# Load data
-# -----------------------------
-
-df = pd.read_csv(DATA_PATH)
-
-df["Date"] = pd.to_datetime(df["Date"])
-
-df = df.replace(
-    [np.inf, -np.inf],
-    np.nan
-)
-
-df = df.dropna().reset_index(drop=True)
-
-
-# -----------------------------
-# Basic calculations
-# -----------------------------
-
-# Prototype signal
-df["Signal"] = df["Target"].map({
-    0: "HOLD",
-    1: "BUY",
-    2: "SELL"
-})
-
-
-# Simple strategy return
-df["Position"] = df["Target"].map({
-    0: 0,
-    1: 1,
-    2: -1
-})
-
-df["Future_Return"] = (
-    df["Close"].shift(-1) /
-    df["Close"]
-) - 1
-
-df["Strategy_Return"] = (
-    df["Position"] *
-    df["Future_Return"]
-)
-
-df = df.dropna(
-    subset=["Strategy_Return"]
-).reset_index(drop=True)
-
-
-# Equity curve
-df["Strategy_Equity"] = (
-    1 + df["Strategy_Return"]
-).cumprod()
-
-df["BuyHold_Equity"] = (
-    1 + df["Future_Return"]
-).cumprod()
-
-
-# Drawdown
-df["Drawdown"] = (
-    df["Strategy_Equity"] /
-    df["Strategy_Equity"].cummax()
-) - 1
-
-
-# Metrics
-total_return = (
-    df["Strategy_Equity"].iloc[-1] - 1
-)
-
-years = len(df) / 252
-
-cagr = (
-    df["Strategy_Equity"].iloc[-1]
-    ** (1 / years)
-) - 1
-
-volatility = (
-    df["Strategy_Return"].std()
-    * np.sqrt(252)
-)
-
-sharpe = (
-    df["Strategy_Return"].mean()
-    / df["Strategy_Return"].std()
-    * np.sqrt(252)
-)
-
-max_drawdown = df["Drawdown"].min()
-
-winning = df[
-    df["Strategy_Return"] > 0
-]
-
-win_rate = (
-    len(winning) /
-    len(df)
-)
-
-buyhold_return = (
-    df["BuyHold_Equity"].iloc[-1] - 1
-)
-
-
-# -----------------------------
-# Regime labels
-# -----------------------------
-
-REGIME_LABELS = {
-    0: "SIDEWAYS",
-    1: "BULL",
-    2: "BEAR"
-}
-
-
-# -----------------------------
-# Dashboard
-# -----------------------------
-
 st.title(
     "Stock Market Regime & Signal Detection"
 )
 
-st.caption(
-    "NIFTY 50 Machine Learning Trading System"
+
+# Load data
+predictions = pd.read_csv(
+    PREDICTIONS_PATH
+)
+
+backtest = pd.read_csv(
+    BACKTEST_PATH
 )
 
 
-# -----------------------------
-# Latest state
-# -----------------------------
-
-latest = df.iloc[-1]
-
-regime = REGIME_LABELS.get(
-    int(latest["Regime"]),
-    f"REGIME {int(latest['Regime'])}"
+predictions["Date"] = pd.to_datetime(
+    predictions["Date"]
 )
 
-signal = latest["Signal"]
+backtest["Date"] = pd.to_datetime(
+    backtest["Date"]
+)
 
 
-st.subheader("Current Market State")
+# Latest prediction
+latest = predictions.iloc[-1]
+
+
+signal_map = {
+    0: "HOLD",
+    1: "BUY",
+    2: "SELL"
+}
+
+
+signal = signal_map[
+    int(latest["Prediction"])
+]
+
+
+# --------------------------------------------------
+# Current Signal
+# --------------------------------------------------
+
+st.header("Current Market Signal")
+
 
 col1, col2, col3, col4 = st.columns(4)
 
+
 with col1:
-    st.metric(
-        "NIFTY 50",
-        f"{latest['Close']:,.2f}"
-    )
 
-with col2:
-    st.metric(
-        "Market Regime",
-        regime
-    )
-
-with col3:
     st.metric(
         "Signal",
         signal
     )
 
-with col4:
-    st.metric(
-        "Momentum",
-        f"{latest['Momentum_20']:.2%}"
-    )
-
-
-# -----------------------------
-# Performance
-# -----------------------------
-
-st.subheader("Strategy Performance")
-
-col1, col2, col3, col4, col5 = st.columns(5)
-
-with col1:
-    st.metric(
-        "CAGR",
-        f"{cagr:.2%}"
-    )
 
 with col2:
+
     st.metric(
-        "Total Return",
-        f"{total_return:.2%}"
+        "Regime",
+        int(latest["Regime"])
     )
+
 
 with col3:
+
     st.metric(
-        "Sharpe",
-        f"{sharpe:.2f}"
+        "Buy Probability",
+        f"{latest['BUY_Probability']:.2%}"
     )
+
 
 with col4:
+
     st.metric(
-        "Max Drawdown",
-        f"{max_drawdown:.2%}"
-    )
-
-with col5:
-    st.metric(
-        "Win Rate",
-        f"{win_rate:.2%}"
+        "Sell Probability",
+        f"{latest['SELL_Probability']:.2%}"
     )
 
 
-# -----------------------------
-# Price
-# -----------------------------
-
-st.subheader("NIFTY 50 Price")
-
-fig = go.Figure()
-
-fig.add_trace(
-    go.Scatter(
-        x=df["Date"],
-        y=df["Close"],
-        name="NIFTY 50"
-    )
-)
-
-fig.update_layout(
-    xaxis_title="Date",
-    yaxis_title="Price",
-    height=500
-)
-
-st.plotly_chart(
-    fig,
-    use_container_width=True
-)
-
-
-# -----------------------------
+# --------------------------------------------------
 # Equity Curve
-# -----------------------------
+# --------------------------------------------------
 
-st.subheader("Strategy vs Buy & Hold")
+st.header("Strategy Performance")
 
-fig = go.Figure()
 
-fig.add_trace(
-    go.Scatter(
-        x=df["Date"],
-        y=df["Strategy_Equity"],
-        name="ML Strategy"
-    )
-)
+chart_data = backtest.set_index(
+    "Date"
+)[
+    [
+        "Strategy_Equity",
+        "Buy_Hold_Equity"
+    ]
+]
 
-fig.add_trace(
-    go.Scatter(
-        x=df["Date"],
-        y=df["BuyHold_Equity"],
-        name="Buy & Hold"
-    )
-)
-
-fig.update_layout(
-    xaxis_title="Date",
-    yaxis_title="Growth of ₹1",
-    height=500
-)
-
-st.plotly_chart(
-    fig,
-    use_container_width=True
+st.line_chart(
+    chart_data
 )
 
 
-# -----------------------------
+# --------------------------------------------------
 # Drawdown
-# -----------------------------
+# --------------------------------------------------
 
-st.subheader("Strategy Drawdown")
+st.header("Strategy Drawdown")
 
-fig = go.Figure()
 
-fig.add_trace(
-    go.Scatter(
-        x=df["Date"],
-        y=df["Drawdown"],
-        name="Drawdown"
-    )
+rolling_max = (
+    backtest["Strategy_Equity"]
+    .cummax()
 )
 
-fig.update_layout(
-    xaxis_title="Date",
-    yaxis_title="Drawdown",
-    height=400
+backtest["Drawdown"] = (
+    backtest["Strategy_Equity"]
+    / rolling_max
+    - 1
 )
 
-st.plotly_chart(
-    fig,
-    use_container_width=True
+drawdown_data = backtest.set_index(
+    "Date"
+)[
+    ["Drawdown"]
+]
+
+st.line_chart(
+    drawdown_data
 )
 
 
-# -----------------------------
-# Regime Distribution
-# -----------------------------
+# --------------------------------------------------
+# Position Exposure
+# --------------------------------------------------
 
-st.subheader("Market Regime Distribution")
+st.header("Position Exposure")
 
-regime_counts = (
-    df["Regime"]
-    .map(REGIME_LABELS)
-    .value_counts()
+
+exposure_data = backtest.set_index(
+    "Date"
+)[
+    ["Position"]
+]
+
+st.line_chart(
+    exposure_data
 )
 
-st.bar_chart(regime_counts)
+
+# --------------------------------------------------
+# Recent Predictions
+# --------------------------------------------------
+
+st.header("Recent Predictions")
 
 
-# -----------------------------
-# Recent signals
-# -----------------------------
-
-st.subheader("Recent Signals")
-
-recent = df[
+recent = predictions[
     [
         "Date",
-        "Close",
         "Regime",
-        "Signal",
-        "Momentum_20",
-        "Volatility_20"
+        "Prediction",
+        "BUY_Probability",
+        "HOLD_Probability",
+        "SELL_Probability"
     ]
 ].tail(20).copy()
 
-recent["Regime"] = recent[
-    "Regime"
-].map(REGIME_LABELS)
+
+recent["Prediction"] = (
+    recent["Prediction"]
+    .map(signal_map)
+)
+
 
 st.dataframe(
     recent,
     use_container_width=True
+)
+
+
+st.caption(
+    "Model outputs are historical research results "
+    "and are not financial advice."
 )
