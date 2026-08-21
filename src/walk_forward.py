@@ -1,309 +1,101 @@
 import os
 import numpy as np
 import pandas as pd
-from xgboost import XGBClassifier
-
+from xgboost import XGBRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 INPUT_PATH = "data/processed/walk_forward_regimes.csv"
 OUTPUT_PATH = "data/processed/walk_forward_results.csv"
 
 FEATURES = [
-    "Log_Return",
-    "Volatility_20",
-    "SMA_20",
-    "SMA_50",
-    "Momentum_20",
-    "Volume_Change",
-    "Drawdown",
-    "Regime"
+    "Log_Return", "Volatility_20", "SMA_20", "SMA_50",
+    "Momentum_20", "Volume_Change", "Drawdown", "Regime"
 ]
 
-TARGET = "Target"
-
-BUY_THRESHOLD = 0.005
-SELL_THRESHOLD = -0.005
+TARGET_HORIZON = 1
+INITIAL_TRAIN_FRACTION = 0.70
 
 
-def clean_data(df):
+def make_target(df):
+    df = df.copy()
+    df["Future_Return"] = df["Close"].shift(-TARGET_HORIZON) / df["Close"] - 1.0
+    return df.dropna(subset=["Future_Return"]).copy()
 
-    # Convert features to numeric
-    for column in FEATURES:
-        df[column] = pd.to_numeric(
-            df[column],
-            errors="coerce"
-        )
 
-    df[TARGET] = pd.to_numeric(
-        df[TARGET],
-        errors="coerce"
+def clean(df):
+    cols = FEATURES + ["Future_Return"]
+    for c in cols:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df.replace([np.inf, -np.inf], np.nan).dropna(subset=cols).reset_index(drop=True)
+
+
+def train_model(X, y):
+    model = XGBRegressor(
+        n_estimators=150,
+        max_depth=2,
+        learning_rate=0.03,
+        min_child_weight=8,
+        subsample=0.7,
+        colsample_bytree=0.7,
+        reg_alpha=0.2,
+        reg_lambda=2.0,
+        objective="reg:squarederror",
+        eval_metric="rmse",
+        random_state=42,
     )
-
-    # Replace infinity values
-    df = df.replace(
-        [np.inf, -np.inf],
-        np.nan
-    )
-
-    # Remove invalid rows
-    df = df.dropna(
-        subset=FEATURES + [TARGET]
-    )
-
-    df = df.reset_index(drop=True)
-
-    df[TARGET] = df[TARGET].astype(int)
-
-    return df
-
-
-def create_target(df):
-
-    # Tomorrow's return
-    df["Future_Return"] = (
-        df["Close"].shift(-1) / df["Close"]
-    ) - 1
-
-    # 0 = HOLD
-    # 1 = BUY
-    # 2 = SELL
-
-    df["Target"] = 0
-
-    df.loc[
-        df["Future_Return"] > BUY_THRESHOLD,
-        "Target"
-    ] = 1
-
-    df.loc[
-        df["Future_Return"] < SELL_THRESHOLD,
-        "Target"
-    ] = 2
-
-    # Last row has no future return
-    df = df.dropna(
-        subset=["Future_Return"]
-    )
-
-    return df
-
-
-def train_model(X_train, y_train):
-
-    X_train = X_train.astype(float)
-    y_train = y_train.astype(int)
-
-    model = XGBClassifier(
-        n_estimators=300,
-        max_depth=4,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        objective="multi:softprob",
-        num_class=3,
-        eval_metric="mlogloss",
-        random_state=42
-    )
-
-    model.fit(
-        X_train,
-        y_train
-    )
-
+    model.fit(X.astype(float), y.astype(float))
     return model
 
 
 def main():
-
     print("Loading walk-forward regime data...")
-
     df = pd.read_csv(INPUT_PATH)
+    df["Date"] = pd.to_datetime(df["Date"])
+    df = clean(make_target(df.sort_values("Date").reset_index(drop=True)))
 
-    df["Date"] = pd.to_datetime(
-        df["Date"]
-    )
-
-    df = df.sort_values(
-        "Date"
-    ).reset_index(drop=True)
-
-    print(
-        f"Raw rows: {len(df)}"
-    )
-
-    # Create BUY/HOLD/SELL target
-    df = create_target(df)
-
-    print(
-        f"Rows after target creation: "
-        f"{len(df)}"
-    )
-
-    # Clean features
-    df = clean_data(df)
-
-    print(
-        f"Clean rows: {len(df)}"
-    )
-
-    # Initial historical training period
-    initial_train_size = int(
-        len(df) * 0.70
-    )
-
-    total_predictions = (
-        len(df) - initial_train_size
-    )
-
-    print(
-        f"Initial training size: "
-        f"{initial_train_size}"
-    )
-
-    print(
-        f"Walk-forward predictions: "
-        f"{total_predictions}"
-    )
-
+    initial = int(len(df) * INITIAL_TRAIN_FRACTION)
     predictions = []
+    print(f"Rows: {len(df)}")
+    print(f"Initial training size: {initial}")
+    print(f"Walk-forward predictions: {len(df) - initial}")
 
-    for i in range(
-        initial_train_size,
-        len(df)
-    ):
-
-        # ONLY historical data
+    for i in range(initial, len(df)):
         train = df.iloc[:i]
-
-        # Current unseen observation
         test = df.iloc[[i]]
-
-        X_train = (
-            train[FEATURES]
-            .astype(float)
-        )
-
-        y_train = (
-            train[TARGET]
-            .astype(int)
-        )
-
-        X_test = (
-            test[FEATURES]
-            .astype(float)
-        )
-
-        # Safety checks
-        if X_train.isnull().values.any():
-            raise ValueError(
-                "NaN detected in X_train."
-            )
-
-        if X_test.isnull().values.any():
-            raise ValueError(
-                "NaN detected in X_test."
-            )
-
-        # Train using historical data only
-        model = train_model(
-            X_train,
-            y_train
-        )
-
-        # Predict unseen observation
-        prediction = model.predict(
-            X_test
-        )[0]
-
-        probabilities = model.predict_proba(
-            X_test
-        )[0]
-
+        model = train_model(train[FEATURES], train["Future_Return"])
+        pred = float(model.predict(test[FEATURES].astype(float))[0])
         predictions.append({
-
-            "Date":
-                test["Date"].iloc[0],
-
-            "Close":
-                test["Close"].iloc[0],
-
-            "Actual":
-                test[TARGET].iloc[0],
-
-            "Future_Return":
-                test["Future_Return"].iloc[0],
-
-            "Prediction":
-                prediction,
-
-            "HOLD_Probability":
-                probabilities[0],
-
-            "BUY_Probability":
-                probabilities[1],
-
-            "SELL_Probability":
-                probabilities[2],
-
-            "Regime":
-                test["Regime"].iloc[0]
+            "Date": test["Date"].iloc[0],
+            "Close": test["Close"].iloc[0],
+            "Future_Return": test["Future_Return"].iloc[0],
+            "Predicted_Return": pred,
+            "Regime": int(test["Regime"].iloc[0]),
+            "Volatility_20": float(test["Volatility_20"].iloc[0]),
         })
+        n = i - initial + 1
+        if n % 25 == 0:
+            print(f"Processed {n}/{len(df) - initial}")
 
-        completed = (
-            i - initial_train_size + 1
-        )
+    results = pd.DataFrame(predictions)
+    os.makedirs("data/processed", exist_ok=True)
+    results.to_csv(OUTPUT_PATH, index=False)
 
-        if completed % 25 == 0:
-
-            print(
-                f"Processed "
-                f"{completed}/"
-                f"{total_predictions}"
-            )
-
-    results = pd.DataFrame(
-        predictions
-    )
-
-    os.makedirs(
-        "data/processed",
-        exist_ok=True
-    )
-
-    results.to_csv(
-        OUTPUT_PATH,
-        index=False
-    )
+    y = results["Future_Return"]
+    p = results["Predicted_Return"]
+    direction = np.mean(np.sign(y) == np.sign(p))
+    mae = mean_absolute_error(y, p)
+    rmse = np.sqrt(mean_squared_error(y, p))
+    corr = y.corr(p)
 
     print("\n" + "=" * 60)
-    print(
-        "WALK-FORWARD XGBOOST COMPLETE"
-    )
+    print("WALK-FORWARD RETURN MODEL COMPLETE")
     print("=" * 60)
-
-    print(
-        f"Saved to: {OUTPUT_PATH}"
-    )
-
-    print(
-        f"Predictions generated: "
-        f"{len(results)}"
-    )
-
-    print("\nPrediction distribution:")
-
-    print(
-        results["Prediction"]
-        .value_counts()
-        .sort_index()
-    )
-
-    print("\nActual distribution:")
-
-    print(
-        results["Actual"]
-        .value_counts()
-        .sort_index()
-    )
+    print(f"Saved to: {OUTPUT_PATH}")
+    print(f"Predictions generated: {len(results)}")
+    print(f"MAE: {mae:.6f}")
+    print(f"RMSE: {rmse:.6f}")
+    print(f"Direction Accuracy: {direction:.4f}")
+    print(f"Prediction Correlation: {corr:.4f}")
 
 
 if __name__ == "__main__":

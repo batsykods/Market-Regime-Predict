@@ -1,18 +1,13 @@
 import os
 import joblib
+import numpy as np
 import pandas as pd
 
 from xgboost import XGBClassifier
-from sklearn.metrics import (
-    accuracy_score,
-    classification_report,
-    confusion_matrix
-)
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, balanced_accuracy_score, f1_score
 
-
-INPUT_PATH = "data/processed/nifty50_signal_data.csv"
+INPUT_PATH = "data/processed/walk_forward_regimes.csv"
 MODEL_PATH = "data/models/xgboost_signal_model.pkl"
-
 
 FEATURES = [
     "Log_Return",
@@ -22,173 +17,92 @@ FEATURES = [
     "Momentum_20",
     "Volume_Change",
     "Drawdown",
-    "Regime"
+    "Regime",
 ]
 
-
-TARGET = "Target"
+BUY_THRESHOLD = 0.005
+SELL_THRESHOLD = -0.005
 
 
 def load_data():
     df = pd.read_csv(INPUT_PATH)
-
     df["Date"] = pd.to_datetime(df["Date"])
+    df = df.sort_values("Date").reset_index(drop=True)
+    df["Future_Return"] = df["Close"].shift(-1) / df["Close"] - 1
+    df["Target"] = 0
+    df.loc[df["Future_Return"] > BUY_THRESHOLD, "Target"] = 1
+    df.loc[df["Future_Return"] < SELL_THRESHOLD, "Target"] = 2
+    numeric = FEATURES + ["Target", "Future_Return"]
+    for col in numeric:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.replace([np.inf, -np.inf], np.nan)
+    return df.dropna(subset=numeric).reset_index(drop=True)
 
-    df = df.replace([float("inf"), float("-inf")], float("nan"))
-
-    numeric_columns = [
-        "Log_Return",
-        "Volatility_20",
-        "SMA_20",
-        "SMA_50",
-        "Momentum_20",
-        "Volume_Change",
-        "Drawdown",
-        "Regime",
-        "Target"
-    ]
-
-    for col in numeric_columns:
-        df[col] = pd.to_numeric(
-            df[col],
-            errors="coerce"
-        )
-
-    df = df.dropna(
-        subset=numeric_columns
-    )
-
-    return df
 
 def chronological_split(df):
-
-    total = len(df)
-
-    train_end = int(total * 0.70)
-    validation_end = int(total * 0.85)
-
-    train = df.iloc[:train_end]
-    validation = df.iloc[train_end:validation_end]
-    test = df.iloc[validation_end:]
-
-    return train, validation, test
+    n = len(df)
+    train_end = int(n * 0.70)
+    validation_end = int(n * 0.85)
+    return df.iloc[:train_end], df.iloc[train_end:validation_end], df.iloc[validation_end:]
 
 
-def train_model(X_train, y_train):
+def train_model(X, y):
+    counts = y.value_counts().sort_index()
+    total = len(y)
+    class_weights = {int(cls): total / (len(counts) * count) for cls, count in counts.items()}
+    sample_weight = y.map(class_weights).to_numpy()
 
     model = XGBClassifier(
-        n_estimators=300,
-        max_depth=4,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
+        n_estimators=150,
+        max_depth=2,
+        learning_rate=0.03,
+        min_child_weight=8,
+        subsample=0.7,
+        colsample_bytree=0.7,
+        reg_alpha=0.2,
+        reg_lambda=2.0,
         objective="multi:softprob",
         num_class=3,
         eval_metric="mlogloss",
-        random_state=42
+        random_state=42,
     )
-
-    model.fit(
-        X_train,
-        y_train
-    )
-
+    model.fit(X.astype(float), y.astype(int), sample_weight=sample_weight)
     return model
 
 
-def evaluate(model, X, y, dataset_name):
-
-    predictions = model.predict(X)
-
-    accuracy = accuracy_score(
-        y,
-        predictions
-    )
-
-    print(f"\n{dataset_name} Accuracy: {accuracy:.4f}")
-
-    print("\nClassification Report:")
-    print(
-        classification_report(
-            y,
-            predictions,
-            target_names=[
-                "HOLD",
-                "BUY",
-                "SELL"
-            ],
-            zero_division=0
-        )
-    )
-
-    print("\nConfusion Matrix:")
-    print(
-        confusion_matrix(
-            y,
-            predictions
-        )
-    )
+def evaluate(model, X, y, name):
+    pred = model.predict(X.astype(float))
+    print(f"\n{name} Accuracy: {accuracy_score(y, pred):.4f}")
+    print(f"{name} Balanced Accuracy: {balanced_accuracy_score(y, pred):.4f}")
+    print(f"{name} Macro F1: {f1_score(y, pred, average='macro', zero_division=0):.4f}")
+    print(classification_report(y, pred, target_names=["HOLD", "BUY", "SELL"], zero_division=0))
+    print("Confusion Matrix:")
+    print(confusion_matrix(y, pred))
 
 
 def main():
-
     df = load_data()
-
     train, validation, test = chronological_split(df)
-
-    X_train = train[FEATURES]
-    y_train = train[TARGET]
-
-    X_validation = validation[FEATURES]
-    y_validation = validation[TARGET]
-
-    X_test = test[FEATURES]
-    y_test = test[TARGET]
 
     print("Dataset sizes:")
     print(f"Train:      {len(train)}")
     print(f"Validation: {len(validation)}")
     print(f"Test:       {len(test)}")
+    print("Training class distribution:")
+    print(train["Target"].value_counts().sort_index().rename(index={0: "HOLD", 1: "BUY", 2: "SELL"}))
 
-    model = train_model(
-        X_train,
-        y_train
-    )
+    evaluation_model = train_model(train[FEATURES], train["Target"])
+    evaluate(evaluation_model, train[FEATURES], train["Target"], "TRAIN")
+    evaluate(evaluation_model, validation[FEATURES], validation["Target"], "VALIDATION")
+    evaluate(evaluation_model, test[FEATURES], test["Target"], "TEST")
 
-    evaluate(
-        model,
-        X_train,
-        y_train,
-        "TRAIN"
-    )
+    # The holdout test above is only for evaluation. The deployable model is
+    # retrained on every available historical observation after evaluation.
+    final_model = train_model(df[FEATURES], df["Target"])
 
-    evaluate(
-        model,
-        X_validation,
-        y_validation,
-        "VALIDATION"
-    )
-
-    evaluate(
-        model,
-        X_test,
-        y_test,
-        "TEST"
-    )
-
-    os.makedirs(
-        "data/models",
-        exist_ok=True
-    )
-
-    joblib.dump(
-        model,
-        MODEL_PATH
-    )
-
-    print(
-        f"\nModel saved to: {MODEL_PATH}"
-    )
+    os.makedirs("data/models", exist_ok=True)
+    joblib.dump(final_model, MODEL_PATH)
+    print(f"\nFinal live model saved to: {MODEL_PATH}")
 
 
 if __name__ == "__main__":
