@@ -14,8 +14,6 @@ def position_size(row, prediction_cutoff, risk_cutoff):
     regime = int(row["Regime"])
     risk = volatility * np.sqrt(5.0)
 
-    # Only trade unusually strong positive predictions in the
-    # walk-forward distribution. This avoids arbitrary fixed return levels.
     if predicted < prediction_cutoff:
         return 0.0
 
@@ -24,18 +22,18 @@ def position_size(row, prediction_cutoff, risk_cutoff):
         return 0.0
 
     if edge < 0.50:
-        position = 0.10
+        position = 0.15
     elif edge < 0.75:
-        position = 0.20
-    elif edge < 1.00:
         position = 0.30
+    elif edge < 1.00:
+        position = 0.45
     else:
-        position = 0.40
+        position = 0.60
 
     if regime == 0:
-        position *= 0.50
+        position *= 0.60
     elif regime == 2:
-        position *= 0.75
+        position *= 0.85
 
     if volatility > 0.30:
         position *= 0.25
@@ -44,7 +42,7 @@ def position_size(row, prediction_cutoff, risk_cutoff):
     elif volatility > 0.15:
         position *= 0.75
 
-    return min(position, 0.40)
+    return min(position, 0.60)
 
 
 def main():
@@ -58,8 +56,6 @@ def main():
         df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=required).reset_index(drop=True)
 
-    # Thresholds are estimated from predictions only, never from Future_Return.
-    # This prevents target leakage while ensuring the risk layer can actually trade.
     prediction_cutoff = float(df["Predicted_Return"].quantile(0.80))
     risk_ratio = df["Predicted_Return"] / (df["Volatility_20"] * np.sqrt(5.0))
     risk_cutoff = float(risk_ratio.quantile(0.70))
