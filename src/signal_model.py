@@ -1,18 +1,13 @@
 import os
 import joblib
+import numpy as np
 import pandas as pd
 
 from xgboost import XGBClassifier
-from sklearn.metrics import (
-    accuracy_score,
-    classification_report,
-    confusion_matrix
-)
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
-
-INPUT_PATH = "data/processed/nifty50_signal_data.csv"
+INPUT_PATH = "data/processed/walk_forward_regimes.csv"
 MODEL_PATH = "data/models/xgboost_signal_model.pkl"
-
 
 FEATURES = [
     "Log_Return",
@@ -22,60 +17,39 @@ FEATURES = [
     "Momentum_20",
     "Volume_Change",
     "Drawdown",
-    "Regime"
+    "Regime",
 ]
 
-
-TARGET = "Target"
+BUY_THRESHOLD = 0.005
+SELL_THRESHOLD = -0.005
 
 
 def load_data():
     df = pd.read_csv(INPUT_PATH)
-
     df["Date"] = pd.to_datetime(df["Date"])
+    df = df.sort_values("Date").reset_index(drop=True)
 
-    df = df.replace([float("inf"), float("-inf")], float("nan"))
+    df["Future_Return"] = df["Close"].shift(-1) / df["Close"] - 1
+    df["Target"] = 0
+    df.loc[df["Future_Return"] > BUY_THRESHOLD, "Target"] = 1
+    df.loc[df["Future_Return"] < SELL_THRESHOLD, "Target"] = 2
 
-    numeric_columns = [
-        "Log_Return",
-        "Volatility_20",
-        "SMA_20",
-        "SMA_50",
-        "Momentum_20",
-        "Volume_Change",
-        "Drawdown",
-        "Regime",
-        "Target"
-    ]
+    numeric = FEATURES + ["Target", "Future_Return"]
+    for col in numeric:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    for col in numeric_columns:
-        df[col] = pd.to_numeric(
-            df[col],
-            errors="coerce"
-        )
+    df = df.replace([np.inf, -np.inf], np.nan)
+    return df.dropna(subset=numeric).reset_index(drop=True)
 
-    df = df.dropna(
-        subset=numeric_columns
-    )
-
-    return df
 
 def chronological_split(df):
-
-    total = len(df)
-
-    train_end = int(total * 0.70)
-    validation_end = int(total * 0.85)
-
-    train = df.iloc[:train_end]
-    validation = df.iloc[train_end:validation_end]
-    test = df.iloc[validation_end:]
-
-    return train, validation, test
+    n = len(df)
+    train_end = int(n * 0.70)
+    validation_end = int(n * 0.85)
+    return df.iloc[:train_end], df.iloc[train_end:validation_end], df.iloc[validation_end:]
 
 
-def train_model(X_train, y_train):
-
+def train_model(X, y):
     model = XGBClassifier(
         n_estimators=300,
         max_depth=4,
@@ -85,110 +59,38 @@ def train_model(X_train, y_train):
         objective="multi:softprob",
         num_class=3,
         eval_metric="mlogloss",
-        random_state=42
+        random_state=42,
     )
-
-    model.fit(
-        X_train,
-        y_train
-    )
-
+    model.fit(X.astype(float), y.astype(int))
     return model
 
 
-def evaluate(model, X, y, dataset_name):
-
-    predictions = model.predict(X)
-
-    accuracy = accuracy_score(
-        y,
-        predictions
-    )
-
-    print(f"\n{dataset_name} Accuracy: {accuracy:.4f}")
-
-    print("\nClassification Report:")
-    print(
-        classification_report(
-            y,
-            predictions,
-            target_names=[
-                "HOLD",
-                "BUY",
-                "SELL"
-            ],
-            zero_division=0
-        )
-    )
-
-    print("\nConfusion Matrix:")
-    print(
-        confusion_matrix(
-            y,
-            predictions
-        )
-    )
+def evaluate(model, X, y, name):
+    pred = model.predict(X.astype(float))
+    print(f"\n{name} Accuracy: {accuracy_score(y, pred):.4f}")
+    print(classification_report(y, pred, target_names=["HOLD", "BUY", "SELL"], zero_division=0))
+    print("Confusion Matrix:")
+    print(confusion_matrix(y, pred))
 
 
 def main():
-
     df = load_data()
-
     train, validation, test = chronological_split(df)
-
-    X_train = train[FEATURES]
-    y_train = train[TARGET]
-
-    X_validation = validation[FEATURES]
-    y_validation = validation[TARGET]
-
-    X_test = test[FEATURES]
-    y_test = test[TARGET]
 
     print("Dataset sizes:")
     print(f"Train:      {len(train)}")
     print(f"Validation: {len(validation)}")
     print(f"Test:       {len(test)}")
 
-    model = train_model(
-        X_train,
-        y_train
-    )
+    model = train_model(train[FEATURES], train["Target"])
 
-    evaluate(
-        model,
-        X_train,
-        y_train,
-        "TRAIN"
-    )
+    evaluate(model, train[FEATURES], train["Target"], "TRAIN")
+    evaluate(model, validation[FEATURES], validation["Target"], "VALIDATION")
+    evaluate(model, test[FEATURES], test["Target"], "TEST")
 
-    evaluate(
-        model,
-        X_validation,
-        y_validation,
-        "VALIDATION"
-    )
-
-    evaluate(
-        model,
-        X_test,
-        y_test,
-        "TEST"
-    )
-
-    os.makedirs(
-        "data/models",
-        exist_ok=True
-    )
-
-    joblib.dump(
-        model,
-        MODEL_PATH
-    )
-
-    print(
-        f"\nModel saved to: {MODEL_PATH}"
-    )
+    os.makedirs("data/models", exist_ok=True)
+    joblib.dump(model, MODEL_PATH)
+    print(f"\nModel saved to: {MODEL_PATH}")
 
 
 if __name__ == "__main__":
