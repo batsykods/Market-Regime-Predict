@@ -6,13 +6,14 @@ PREDICTIONS_PATH = "data/processed/walk_forward_results.csv"
 OUTPUT_PATH = "data/processed/risk_adjusted_backtest.csv"
 INITIAL_CAPITAL = 100000
 TRANSACTION_COST = 0.001
+HOLDING_DAYS = 5
 
 
 def position_size(row, prediction_cutoff, risk_cutoff):
     predicted = float(row["Predicted_Return"])
     volatility = max(float(row["Volatility_20"]), 1e-6)
     regime = int(row["Regime"])
-    risk = volatility * np.sqrt(5.0)
+    risk = volatility * np.sqrt(HOLDING_DAYS)
 
     if predicted < prediction_cutoff:
         return 0.0
@@ -51,13 +52,13 @@ def main():
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").reset_index(drop=True)
 
-    required = ["Future_Return", "Predicted_Return", "Regime", "Volatility_20"]
+    required = ["Close", "Future_Return", "Predicted_Return", "Regime", "Volatility_20"]
     for col in required:
         df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=required).reset_index(drop=True)
 
     prediction_cutoff = float(df["Predicted_Return"].quantile(0.80))
-    risk_ratio = df["Predicted_Return"] / (df["Volatility_20"] * np.sqrt(5.0))
+    risk_ratio = df["Predicted_Return"] / (df["Volatility_20"] * np.sqrt(HOLDING_DAYS))
     risk_cutoff = float(risk_ratio.quantile(0.70))
 
     print(f"Rows used: {len(df)}")
@@ -65,13 +66,37 @@ def main():
     print(f"Risk cutoff (70th percentile): {risk_cutoff:.4f}")
 
     df["Desired_Position"] = df.apply(
-        position_size,
-        axis=1,
-        args=(prediction_cutoff, risk_cutoff),
+        position_size, axis=1, args=(prediction_cutoff, risk_cutoff)
     )
 
-    df["Position"] = df["Desired_Position"].shift(1).fillna(0.0)
-    df["Market_Return"] = df["Future_Return"]
+    # The model predicts the next five-session return. Therefore a signal
+    # is entered on the next session and held for five sessions. Do not
+    # compound overlapping five-day forward returns as if they were daily.
+    positions = np.zeros(len(df), dtype=float)
+    active_until = -1
+    active_position = 0.0
+
+    for i in range(len(df)):
+        if i <= active_until:
+            positions[i] = active_position
+            continue
+
+        if i == 0:
+            continue
+
+        signal = df.loc[i - 1, "Desired_Position"]
+        if signal > 0:
+            active_position = signal
+            active_until = min(i + HOLDING_DAYS - 1, len(df) - 1)
+            positions[i] = active_position
+        else:
+            active_position = 0.0
+            positions[i] = 0.0
+
+    df["Position"] = positions
+
+    # Use actual one-session close-to-close returns for the equity curve.
+    df["Market_Return"] = df["Close"].pct_change().fillna(0.0)
     df["Strategy_Return"] = df["Position"] * df["Market_Return"]
     df["Trade"] = df["Position"].diff().abs().fillna(df["Position"].abs())
     df["Transaction_Cost"] = df["Trade"] * TRANSACTION_COST
@@ -84,7 +109,7 @@ def main():
 
     active = df[df["Desired_Position"] > 0]
     print("\n" + "=" * 50)
-    print("RISK-ADJUSTED 5-DAY RETURN BACKTEST COMPLETE")
+    print("RISK-ADJUSTED 5-DAY HOLDING BACKTEST COMPLETE")
     print("=" * 50)
     print(f"Eligible long signals: {len(active)}")
     print(f"Final Strategy Value: ₹{df['Strategy_Equity'].iloc[-1]:,.2f}")
