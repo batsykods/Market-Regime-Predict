@@ -3,47 +3,40 @@ import numpy as np
 import pandas as pd
 
 PREDICTIONS_PATH = "data/processed/walk_forward_results.csv"
-REGIMES_PATH = "data/processed/walk_forward_regimes.csv"
 OUTPUT_PATH = "data/processed/risk_adjusted_backtest.csv"
 
 INITIAL_CAPITAL = 100000
 TRANSACTION_COST = 0.001
 
 
-def calculate_position_size(row):
-    buy = float(row["BUY_Probability"])
-    hold = float(row["HOLD_Probability"])
-    sell = float(row["SELL_Probability"])
+def position_size(row):
+    predicted = float(row["Predicted_Return"])
+    volatility = max(float(row["Volatility_20"]), 1e-6)
     regime = int(row["Regime"])
-    volatility = float(row["Volatility_20"])
-    prediction = int(row["Prediction"])
 
-    # Only take the model's BUY class; no discretionary label override.
-    if prediction != 1:
+    # Trade only when predicted return is positive and large enough
+    # to compensate for estimated one-day noise and transaction costs.
+    threshold = max(0.0015, 0.20 * volatility)
+    if predicted <= threshold:
         return 0.0
 
-    # The walk-forward model never reaches 0.55 on most observations.
-    # Use a minimum probability plus a small edge over the runner-up.
-    runner_up = max(hold, sell)
-    edge = buy - runner_up
-    if buy < 0.40 or edge < 0.03:
-        return 0.0
-
-    # Confidence-based base exposure.
-    if buy >= 0.50:
-        position = 0.50
-    elif buy >= 0.45:
-        position = 0.35
-    else:
+    # Signal strength relative to current volatility.
+    edge = predicted / volatility
+    if edge < 0.20:
+        position = 0.10
+    elif edge < 0.35:
         position = 0.20
+    elif edge < 0.50:
+        position = 0.30
+    else:
+        position = 0.40
 
-    # Regime modifies, rather than vetoes, exposure.
+    # Regime is a risk modifier, not a prediction override.
     if regime == 0:
         position *= 0.50
     elif regime == 2:
         position *= 0.75
 
-    # Volatility cap.
     if volatility > 0.30:
         position *= 0.25
     elif volatility > 0.20:
@@ -51,45 +44,26 @@ def calculate_position_size(row):
     elif volatility > 0.15:
         position *= 0.75
 
-    return min(position, 0.50)
+    return min(position, 0.40)
 
 
 def main():
-    print("Loading predictions...")
-    predictions = pd.read_csv(PREDICTIONS_PATH)
-
-    print("Loading regime data...")
-    regimes = pd.read_csv(REGIMES_PATH)
-
-    predictions["Date"] = pd.to_datetime(predictions["Date"])
-    regimes["Date"] = pd.to_datetime(regimes["Date"])
-
-    volatility_data = regimes[["Date", "Volatility_20"]]
-
-    df = predictions.merge(
-        volatility_data,
-        on="Date",
-        how="left",
-        validate="one_to_one",
-    )
+    print("Loading walk-forward return predictions...")
+    df = pd.read_csv(PREDICTIONS_PATH)
+    df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").reset_index(drop=True)
 
-    required = [
-        "Future_Return", "Prediction", "HOLD_Probability",
-        "BUY_Probability", "SELL_Probability", "Regime",
-        "Volatility_20",
-    ]
-    for column in required:
-        df[column] = pd.to_numeric(df[column], errors="coerce")
+    required = ["Future_Return", "Predicted_Return", "Regime", "Volatility_20"]
+    for col in required:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    df = df.replace([np.inf, -np.inf], np.nan)
-    df = df.dropna(subset=required).reset_index(drop=True)
-
+    df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=required).reset_index(drop=True)
     print(f"Rows used: {len(df)}")
 
-    df["Desired_Position"] = df.apply(calculate_position_size, axis=1)
-    df["Position"] = df["Desired_Position"].shift(1).fillna(0.0)
+    df["Desired_Position"] = df.apply(position_size, axis=1)
 
+    # Prediction made at today's close is executed for the next session.
+    df["Position"] = df["Desired_Position"].shift(1).fillna(0.0)
     df["Market_Return"] = df["Future_Return"]
     df["Strategy_Return"] = df["Position"] * df["Market_Return"]
     df["Trade"] = df["Position"].diff().abs().fillna(df["Position"].abs())
@@ -104,9 +78,9 @@ def main():
 
     active = df[df["Desired_Position"] > 0]
     print("\n" + "=" * 50)
-    print("RISK-ADJUSTED BACKTEST COMPLETE")
+    print("RISK-ADJUSTED RETURN BACKTEST COMPLETE")
     print("=" * 50)
-    print(f"Eligible BUY signals: {len(active)}")
+    print(f"Eligible long signals: {len(active)}")
     print(f"Final Strategy Value: ₹{df['Strategy_Equity'].iloc[-1]:,.2f}")
     print(f"Final Buy & Hold Value: ₹{df['Buy_Hold_Equity'].iloc[-1]:,.2f}")
     print(f"Average Position: {df['Position'].mean():.2%}")
