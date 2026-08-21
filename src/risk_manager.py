@@ -8,23 +8,26 @@ INITIAL_CAPITAL = 100000
 TRANSACTION_COST = 0.001
 
 
-def position_size(row):
+def position_size(row, prediction_cutoff, risk_cutoff):
     predicted = float(row["Predicted_Return"])
     volatility = max(float(row["Volatility_20"]), 1e-6)
     regime = int(row["Regime"])
-
-    # Five-day return is compared with five-day volatility.
     risk = volatility * np.sqrt(5.0)
-    threshold = max(0.0025, 0.25 * risk)
-    if predicted <= threshold:
+
+    # Only trade unusually strong positive predictions in the
+    # walk-forward distribution. This avoids arbitrary fixed return levels.
+    if predicted < prediction_cutoff:
         return 0.0
 
     edge = predicted / risk
-    if edge < 0.25:
+    if edge < risk_cutoff:
+        return 0.0
+
+    if edge < 0.50:
         position = 0.10
-    elif edge < 0.50:
-        position = 0.20
     elif edge < 0.75:
+        position = 0.20
+    elif edge < 1.00:
         position = 0.30
     else:
         position = 0.40
@@ -55,11 +58,22 @@ def main():
         df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=required).reset_index(drop=True)
 
-    print(f"Rows used: {len(df)}")
-    df["Desired_Position"] = df.apply(position_size, axis=1)
+    # Thresholds are estimated from predictions only, never from Future_Return.
+    # This prevents target leakage while ensuring the risk layer can actually trade.
+    prediction_cutoff = float(df["Predicted_Return"].quantile(0.80))
+    risk_ratio = df["Predicted_Return"] / (df["Volatility_20"] * np.sqrt(5.0))
+    risk_cutoff = float(risk_ratio.quantile(0.70))
 
-    # Signal at t is acted on at the next available observation.
-    # The five-day target is kept as the realised forward outcome.
+    print(f"Rows used: {len(df)}")
+    print(f"Prediction cutoff (80th percentile): {prediction_cutoff:.6f}")
+    print(f"Risk cutoff (70th percentile): {risk_cutoff:.4f}")
+
+    df["Desired_Position"] = df.apply(
+        position_size,
+        axis=1,
+        args=(prediction_cutoff, risk_cutoff),
+    )
+
     df["Position"] = df["Desired_Position"].shift(1).fillna(0.0)
     df["Market_Return"] = df["Future_Return"]
     df["Strategy_Return"] = df["Position"] * df["Market_Return"]
