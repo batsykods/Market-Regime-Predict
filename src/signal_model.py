@@ -50,12 +50,16 @@ def chronological_split(df):
 
 
 def train_model(X, y):
+    # Conservative model to reduce overfitting.
     model = XGBClassifier(
-        n_estimators=300,
-        max_depth=4,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
+        n_estimators=150,
+        max_depth=2,
+        learning_rate=0.03,
+        min_child_weight=8,
+        subsample=0.7,
+        colsample_bytree=0.7,
+        reg_alpha=0.2,
+        reg_lambda=2.0,
         objective="multi:softprob",
         num_class=3,
         eval_metric="mlogloss",
