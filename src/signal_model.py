@@ -28,16 +28,13 @@ def load_data():
     df = pd.read_csv(INPUT_PATH)
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").reset_index(drop=True)
-
     df["Future_Return"] = df["Close"].shift(-1) / df["Close"] - 1
     df["Target"] = 0
     df.loc[df["Future_Return"] > BUY_THRESHOLD, "Target"] = 1
     df.loc[df["Future_Return"] < SELL_THRESHOLD, "Target"] = 2
-
     numeric = FEATURES + ["Target", "Future_Return"]
     for col in numeric:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-
     df = df.replace([np.inf, -np.inf], np.nan)
     return df.dropna(subset=numeric).reset_index(drop=True)
 
@@ -52,10 +49,7 @@ def chronological_split(df):
 def train_model(X, y):
     counts = y.value_counts().sort_index()
     total = len(y)
-    class_weights = {
-        int(cls): total / (len(counts) * count)
-        for cls, count in counts.items()
-    }
+    class_weights = {int(cls): total / (len(counts) * count) for cls, count in counts.items()}
     sample_weight = y.map(class_weights).to_numpy()
 
     model = XGBClassifier(
@@ -97,15 +91,18 @@ def main():
     print("Training class distribution:")
     print(train["Target"].value_counts().sort_index().rename(index={0: "HOLD", 1: "BUY", 2: "SELL"}))
 
-    model = train_model(train[FEATURES], train["Target"])
+    evaluation_model = train_model(train[FEATURES], train["Target"])
+    evaluate(evaluation_model, train[FEATURES], train["Target"], "TRAIN")
+    evaluate(evaluation_model, validation[FEATURES], validation["Target"], "VALIDATION")
+    evaluate(evaluation_model, test[FEATURES], test["Target"], "TEST")
 
-    evaluate(model, train[FEATURES], train["Target"], "TRAIN")
-    evaluate(model, validation[FEATURES], validation["Target"], "VALIDATION")
-    evaluate(model, test[FEATURES], test["Target"], "TEST")
+    # The holdout test above is only for evaluation. The deployable model is
+    # retrained on every available historical observation after evaluation.
+    final_model = train_model(df[FEATURES], df["Target"])
 
     os.makedirs("data/models", exist_ok=True)
-    joblib.dump(model, MODEL_PATH)
-    print(f"\nModel saved to: {MODEL_PATH}")
+    joblib.dump(final_model, MODEL_PATH)
+    print(f"\nFinal live model saved to: {MODEL_PATH}")
 
 
 if __name__ == "__main__":
