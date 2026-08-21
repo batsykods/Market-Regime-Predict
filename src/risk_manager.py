@@ -22,6 +22,11 @@ def position_size(row, prediction_cutoff, risk_cutoff):
     if edge < risk_cutoff:
         return 0.0
 
+    # Regime 0 is the historically defensive/negative regime.
+    # Regimes 1 and 2 are allowed to carry positive exposure.
+    if regime == 0:
+        return 0.0
+
     if edge < 0.50:
         position = 0.15
     elif edge < 0.75:
@@ -31,9 +36,7 @@ def position_size(row, prediction_cutoff, risk_cutoff):
     else:
         position = 0.60
 
-    if regime == 0:
-        position *= 0.60
-    elif regime == 2:
+    if regime == 2:
         position *= 0.85
 
     if volatility > 0.30:
@@ -69,9 +72,6 @@ def main():
         position_size, axis=1, args=(prediction_cutoff, risk_cutoff)
     )
 
-    # A qualifying signal opens a five-session position. A new qualifying
-    # signal can extend the holding period, but a weak signal cannot force
-    # an early exit. This reduces threshold-churn.
     positions = np.zeros(len(df), dtype=float)
     active_position = 0.0
     remaining = 0
@@ -106,7 +106,7 @@ def main():
 
     active = df[df["Desired_Position"] > 0]
     print("\n" + "=" * 50)
-    print("RISK-ADJUSTED 5-DAY PERSISTENT BACKTEST COMPLETE")
+    print("REGIME-AWARE 5-DAY PERSISTENT BACKTEST COMPLETE")
     print("=" * 50)
     print(f"Eligible long signals: {len(active)}")
     print(f"Final Strategy Value: ₹{df['Strategy_Equity'].iloc[-1]:,.2f}")
