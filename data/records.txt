@@ -1,0 +1,10 @@
+LIVE MODEL PREDICTION
+========================================
+Date: 2026-08-21 00:00:00+05:30
+Close: 24252.20
+Raw HMM State: 0
+Regime: 0
+Signal: BUY
+HOLD Probability: 17.18%
+BUY Probability: 66.19%
+SELL Probability: 16.63%
