@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from xgboost import XGBClassifier
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, balanced_accuracy_score, f1_score
 
 INPUT_PATH = "data/processed/walk_forward_regimes.csv"
 MODEL_PATH = "data/models/xgboost_signal_model.pkl"
@@ -50,7 +50,14 @@ def chronological_split(df):
 
 
 def train_model(X, y):
-    # Conservative model to reduce overfitting.
+    counts = y.value_counts().sort_index()
+    total = len(y)
+    class_weights = {
+        int(cls): total / (len(counts) * count)
+        for cls, count in counts.items()
+    }
+    sample_weight = y.map(class_weights).to_numpy()
+
     model = XGBClassifier(
         n_estimators=150,
         max_depth=2,
@@ -65,13 +72,15 @@ def train_model(X, y):
         eval_metric="mlogloss",
         random_state=42,
     )
-    model.fit(X.astype(float), y.astype(int))
+    model.fit(X.astype(float), y.astype(int), sample_weight=sample_weight)
     return model
 
 
 def evaluate(model, X, y, name):
     pred = model.predict(X.astype(float))
     print(f"\n{name} Accuracy: {accuracy_score(y, pred):.4f}")
+    print(f"{name} Balanced Accuracy: {balanced_accuracy_score(y, pred):.4f}")
+    print(f"{name} Macro F1: {f1_score(y, pred, average='macro', zero_division=0):.4f}")
     print(classification_report(y, pred, target_names=["HOLD", "BUY", "SELL"], zero_division=0))
     print("Confusion Matrix:")
     print(confusion_matrix(y, pred))
@@ -85,6 +94,8 @@ def main():
     print(f"Train:      {len(train)}")
     print(f"Validation: {len(validation)}")
     print(f"Test:       {len(test)}")
+    print("Training class distribution:")
+    print(train["Target"].value_counts().sort_index().rename(index={0: "HOLD", 1: "BUY", 2: "SELL"}))
 
     model = train_model(train[FEATURES], train["Target"])
 
