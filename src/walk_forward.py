@@ -12,7 +12,7 @@ FEATURES = [
     "Momentum_20", "Volume_Change", "Drawdown", "Regime"
 ]
 
-TARGET_HORIZON = 1
+TARGET_HORIZON = 5
 INITIAL_TRAIN_FRACTION = 0.70
 
 
@@ -30,7 +30,7 @@ def clean(df):
 
 
 def train_model(X, y):
-    model = XGBRegressor(
+    return XGBRegressor(
         n_estimators=150,
         max_depth=2,
         learning_rate=0.03,
@@ -42,9 +42,7 @@ def train_model(X, y):
         objective="reg:squarederror",
         eval_metric="rmse",
         random_state=42,
-    )
-    model.fit(X.astype(float), y.astype(float))
-    return model
+    ).fit(X.astype(float), y.astype(float))
 
 
 def main():
@@ -55,9 +53,10 @@ def main():
 
     initial = int(len(df) * INITIAL_TRAIN_FRACTION)
     predictions = []
+    total = len(df) - initial
     print(f"Rows: {len(df)}")
     print(f"Initial training size: {initial}")
-    print(f"Walk-forward predictions: {len(df) - initial}")
+    print(f"Walk-forward predictions: {total}")
 
     for i in range(initial, len(df)):
         train = df.iloc[:i]
@@ -74,21 +73,20 @@ def main():
         })
         n = i - initial + 1
         if n % 25 == 0:
-            print(f"Processed {n}/{len(df) - initial}")
+            print(f"Processed {n}/{total}")
 
     results = pd.DataFrame(predictions)
     os.makedirs("data/processed", exist_ok=True)
     results.to_csv(OUTPUT_PATH, index=False)
 
-    y = results["Future_Return"]
-    p = results["Predicted_Return"]
+    y, p = results["Future_Return"], results["Predicted_Return"]
     direction = np.mean(np.sign(y) == np.sign(p))
     mae = mean_absolute_error(y, p)
     rmse = np.sqrt(mean_squared_error(y, p))
     corr = y.corr(p)
 
     print("\n" + "=" * 60)
-    print("WALK-FORWARD RETURN MODEL COMPLETE")
+    print("WALK-FORWARD 5-DAY RETURN MODEL COMPLETE")
     print("=" * 60)
     print(f"Saved to: {OUTPUT_PATH}")
     print(f"Predictions generated: {len(results)}")
