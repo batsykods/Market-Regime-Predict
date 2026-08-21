@@ -2,6 +2,7 @@ import os
 import numpy as np
 import pandas as pd
 from xgboost import XGBClassifier
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, classification_report, confusion_matrix
 
 INPUT_PATH = "data/processed/walk_forward_regimes.csv"
 OUTPUT_PATH = "data/processed/walk_forward_results.csv"
@@ -114,11 +115,21 @@ def main():
     os.makedirs("data/processed", exist_ok=True)
     results.to_csv(OUTPUT_PATH, index=False)
 
+    y_true = results["Actual"].astype(int)
+    y_pred = results["Prediction"].astype(int)
+
     print("\n" + "=" * 60)
     print("WALK-FORWARD XGBOOST COMPLETE")
     print("=" * 60)
     print(f"Saved to: {OUTPUT_PATH}")
     print(f"Predictions generated: {len(results)}")
+    print(f"Accuracy: {accuracy_score(y_true, y_pred):.4f}")
+    print(f"Balanced Accuracy: {balanced_accuracy_score(y_true, y_pred):.4f}")
+    print(f"Macro F1: {f1_score(y_true, y_pred, average='macro', zero_division=0):.4f}")
+    print("\nClassification report:")
+    print(classification_report(y_true, y_pred, target_names=["HOLD", "BUY", "SELL"], zero_division=0))
+    print("Confusion matrix:")
+    print(confusion_matrix(y_true, y_pred))
     print("\nPrediction distribution:")
     print(results["Prediction"].value_counts().sort_index())
     print("\nActual distribution:")
