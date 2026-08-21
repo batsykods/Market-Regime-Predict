@@ -17,31 +17,30 @@ def calculate_position_size(row):
     regime = int(row["Regime"])
     volatility = float(row["Volatility_20"])
 
-    # Regime 0 is the historically weakest regime in this project.
+    # Do not hard-block a regime. The regime is a sizing modifier.
+    # A BUY signal still needs BUY to be the most likely class.
+    if buy_probability != max(buy_probability, hold_probability, sell_probability):
+        return 0.0
+
+    # Conservative but achievable confidence gate.
+    if buy_probability < 0.50:
+        return 0.0
+
+    # Penalise historically weak regime without eliminating all exposure.
     if regime == 0:
-        return 0.0
-
-    # Require BUY to be the strongest class and have a meaningful margin.
-    strongest = max(buy_probability, hold_probability, sell_probability)
-    if buy_probability != strongest:
-        return 0.0
-
-    confidence_margin = buy_probability - max(
-        hold_probability,
-        sell_probability,
-    )
-
-    if buy_probability < 0.55 or confidence_margin < 0.10:
-        return 0.0
-
-    if buy_probability < 0.65:
+        position = 0.125
+    elif regime == 1:
         position = 0.25
-    elif buy_probability < 0.75:
-        position = 0.50
     else:
-        position = 0.75
+        position = 0.375
 
-    # Volatility is annualised in the feature pipeline.
+    # Scale up only when confidence is genuinely stronger.
+    if buy_probability >= 0.65:
+        position *= 1.5
+    elif buy_probability >= 0.60:
+        position *= 1.25
+
+    # Volatility reduction.
     if volatility > 0.30:
         position *= 0.25
     elif volatility > 0.20:
@@ -49,7 +48,7 @@ def calculate_position_size(row):
     elif volatility > 0.15:
         position *= 0.75
 
-    return position
+    return min(position, 0.50)
 
 
 def main():
@@ -96,24 +95,17 @@ def main():
         axis=1,
     )
 
-    # A signal generated at today's close is executed for the next session.
-    df["Position"] = (
-        df["Desired_Position"].shift(1).fillna(0.0)
-    )
+    # Signal at today's close is executed for the next session.
+    df["Position"] = df["Desired_Position"].shift(1).fillna(0.0)
 
     df["Market_Return"] = df["Future_Return"]
-    df["Strategy_Return"] = (
-        df["Position"] * df["Market_Return"]
-    )
+    df["Strategy_Return"] = df["Position"] * df["Market_Return"]
 
     df["Trade"] = (
         df["Position"].diff().abs().fillna(df["Position"].abs())
     )
 
-    df["Transaction_Cost"] = (
-        df["Trade"] * TRANSACTION_COST
-    )
-
+    df["Transaction_Cost"] = df["Trade"] * TRANSACTION_COST
     df["Strategy_Return_After_Cost"] = (
         df["Strategy_Return"] - df["Transaction_Cost"]
     )
@@ -124,16 +116,17 @@ def main():
     )
 
     df["Buy_Hold_Equity"] = (
-        INITIAL_CAPITAL
-        * (1 + df["Market_Return"]).cumprod()
+        INITIAL_CAPITAL * (1 + df["Market_Return"]).cumprod()
     )
 
     os.makedirs("data/processed", exist_ok=True)
     df.to_csv(OUTPUT_PATH, index=False)
 
+    active = df[df["Desired_Position"] > 0]
     print("\n" + "=" * 50)
     print("RISK-ADJUSTED BACKTEST COMPLETE")
     print("=" * 50)
+    print(f"Eligible BUY signals: {len(active)}")
     print(f"Final Strategy Value: ₹{df['Strategy_Equity'].iloc[-1]:,.2f}")
     print(f"Final Buy & Hold Value: ₹{df['Buy_Hold_Equity'].iloc[-1]:,.2f}")
     print(f"Average Position: {df['Position'].mean():.2%}")
