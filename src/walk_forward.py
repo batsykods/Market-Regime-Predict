@@ -8,12 +8,28 @@ INPUT_PATH = "data/processed/walk_forward_regimes.csv"
 OUTPUT_PATH = "data/processed/walk_forward_results.csv"
 
 FEATURES = [
-    "Log_Return", "Volatility_20", "SMA_20", "SMA_50",
-    "Momentum_20", "Volume_Change", "Drawdown", "Regime"
+    "Log_Return", "Volatility_20", "Volatility_5", "Volatility_Ratio",
+    "SMA_20", "SMA_50", "Price_SMA20_Ratio", "Price_SMA50_Ratio",
+    "Momentum_5", "Momentum_20", "Momentum_60", "Volume_Change",
+    "Drawdown", "ATR_14", "Regime"
 ]
 
 TARGET_HORIZON = 5
 INITIAL_TRAIN_FRACTION = 0.70
+
+
+def add_features(df):
+    df = df.copy()
+    close = df["Close"].astype(float)
+    log_return = df["Log_Return"].astype(float)
+
+    df["Volatility_5"] = log_return.rolling(5).std() * np.sqrt(252)
+    df["Volatility_Ratio"] = df["Volatility_5"] / df["Volatility_20"].replace(0, np.nan)
+    df["Price_SMA20_Ratio"] = close / df["SMA_20"] - 1.0
+    df["Price_SMA50_Ratio"] = close / df["SMA_50"] - 1.0
+    df["Momentum_5"] = close.pct_change(5)
+    df["Momentum_60"] = close.pct_change(60)
+    return df
 
 
 def make_target(df):
@@ -31,14 +47,14 @@ def clean(df):
 
 def train_model(X, y):
     return XGBRegressor(
-        n_estimators=150,
+        n_estimators=200,
         max_depth=2,
-        learning_rate=0.03,
-        min_child_weight=8,
-        subsample=0.7,
-        colsample_bytree=0.7,
-        reg_alpha=0.2,
-        reg_lambda=2.0,
+        learning_rate=0.025,
+        min_child_weight=10,
+        subsample=0.75,
+        colsample_bytree=0.75,
+        reg_alpha=0.25,
+        reg_lambda=3.0,
         objective="reg:squarederror",
         eval_metric="rmse",
         random_state=42,
@@ -49,7 +65,8 @@ def main():
     print("Loading walk-forward regime data...")
     df = pd.read_csv(INPUT_PATH)
     df["Date"] = pd.to_datetime(df["Date"])
-    df = clean(make_target(df.sort_values("Date").reset_index(drop=True)))
+    df = add_features(df.sort_values("Date").reset_index(drop=True))
+    df = clean(make_target(df))
 
     initial = int(len(df) * INITIAL_TRAIN_FRACTION)
     predictions = []
