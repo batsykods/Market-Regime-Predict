@@ -11,36 +11,39 @@ TRANSACTION_COST = 0.001
 
 
 def calculate_position_size(row):
-    buy_probability = float(row["BUY_Probability"])
-    sell_probability = float(row["SELL_Probability"])
-    hold_probability = float(row["HOLD_Probability"])
+    buy = float(row["BUY_Probability"])
+    hold = float(row["HOLD_Probability"])
+    sell = float(row["SELL_Probability"])
     regime = int(row["Regime"])
     volatility = float(row["Volatility_20"])
+    prediction = int(row["Prediction"])
 
-    # Do not hard-block a regime. The regime is a sizing modifier.
-    # A BUY signal still needs BUY to be the most likely class.
-    if buy_probability != max(buy_probability, hold_probability, sell_probability):
+    # Only take the model's BUY class; no discretionary label override.
+    if prediction != 1:
         return 0.0
 
-    # Conservative but achievable confidence gate.
-    if buy_probability < 0.50:
+    # The walk-forward model never reaches 0.55 on most observations.
+    # Use a minimum probability plus a small edge over the runner-up.
+    runner_up = max(hold, sell)
+    edge = buy - runner_up
+    if buy < 0.40 or edge < 0.03:
         return 0.0
 
-    # Penalise historically weak regime without eliminating all exposure.
-    if regime == 0:
-        position = 0.125
-    elif regime == 1:
-        position = 0.25
+    # Confidence-based base exposure.
+    if buy >= 0.50:
+        position = 0.50
+    elif buy >= 0.45:
+        position = 0.35
     else:
-        position = 0.375
+        position = 0.20
 
-    # Scale up only when confidence is genuinely stronger.
-    if buy_probability >= 0.65:
-        position *= 1.5
-    elif buy_probability >= 0.60:
-        position *= 1.25
+    # Regime modifies, rather than vetoes, exposure.
+    if regime == 0:
+        position *= 0.50
+    elif regime == 2:
+        position *= 0.75
 
-    # Volatility reduction.
+    # Volatility cap.
     if volatility > 0.30:
         position *= 0.25
     elif volatility > 0.20:
@@ -69,19 +72,13 @@ def main():
         how="left",
         validate="one_to_one",
     )
-
     df = df.sort_values("Date").reset_index(drop=True)
 
     required = [
-        "Future_Return",
-        "Prediction",
-        "HOLD_Probability",
-        "BUY_Probability",
-        "SELL_Probability",
-        "Regime",
+        "Future_Return", "Prediction", "HOLD_Probability",
+        "BUY_Probability", "SELL_Probability", "Regime",
         "Volatility_20",
     ]
-
     for column in required:
         df[column] = pd.to_numeric(df[column], errors="coerce")
 
@@ -90,34 +87,17 @@ def main():
 
     print(f"Rows used: {len(df)}")
 
-    df["Desired_Position"] = df.apply(
-        calculate_position_size,
-        axis=1,
-    )
-
-    # Signal at today's close is executed for the next session.
+    df["Desired_Position"] = df.apply(calculate_position_size, axis=1)
     df["Position"] = df["Desired_Position"].shift(1).fillna(0.0)
 
     df["Market_Return"] = df["Future_Return"]
     df["Strategy_Return"] = df["Position"] * df["Market_Return"]
-
-    df["Trade"] = (
-        df["Position"].diff().abs().fillna(df["Position"].abs())
-    )
-
+    df["Trade"] = df["Position"].diff().abs().fillna(df["Position"].abs())
     df["Transaction_Cost"] = df["Trade"] * TRANSACTION_COST
-    df["Strategy_Return_After_Cost"] = (
-        df["Strategy_Return"] - df["Transaction_Cost"]
-    )
+    df["Strategy_Return_After_Cost"] = df["Strategy_Return"] - df["Transaction_Cost"]
 
-    df["Strategy_Equity"] = (
-        INITIAL_CAPITAL
-        * (1 + df["Strategy_Return_After_Cost"]).cumprod()
-    )
-
-    df["Buy_Hold_Equity"] = (
-        INITIAL_CAPITAL * (1 + df["Market_Return"]).cumprod()
-    )
+    df["Strategy_Equity"] = INITIAL_CAPITAL * (1 + df["Strategy_Return_After_Cost"]).cumprod()
+    df["Buy_Hold_Equity"] = INITIAL_CAPITAL * (1 + df["Market_Return"]).cumprod()
 
     os.makedirs("data/processed", exist_ok=True)
     df.to_csv(OUTPUT_PATH, index=False)
