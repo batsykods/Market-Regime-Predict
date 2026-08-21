@@ -4,7 +4,6 @@ import pandas as pd
 
 PREDICTIONS_PATH = "data/processed/walk_forward_results.csv"
 OUTPUT_PATH = "data/processed/risk_adjusted_backtest.csv"
-
 INITIAL_CAPITAL = 100000
 TRANSACTION_COST = 0.001
 
@@ -14,24 +13,22 @@ def position_size(row):
     volatility = max(float(row["Volatility_20"]), 1e-6)
     regime = int(row["Regime"])
 
-    # Trade only when predicted return is positive and large enough
-    # to compensate for estimated one-day noise and transaction costs.
-    threshold = max(0.0015, 0.20 * volatility)
+    # Five-day return is compared with five-day volatility.
+    risk = volatility * np.sqrt(5.0)
+    threshold = max(0.0025, 0.25 * risk)
     if predicted <= threshold:
         return 0.0
 
-    # Signal strength relative to current volatility.
-    edge = predicted / volatility
-    if edge < 0.20:
+    edge = predicted / risk
+    if edge < 0.25:
         position = 0.10
-    elif edge < 0.35:
-        position = 0.20
     elif edge < 0.50:
+        position = 0.20
+    elif edge < 0.75:
         position = 0.30
     else:
         position = 0.40
 
-    # Regime is a risk modifier, not a prediction override.
     if regime == 0:
         position *= 0.50
     elif regime == 2:
@@ -48,7 +45,7 @@ def position_size(row):
 
 
 def main():
-    print("Loading walk-forward return predictions...")
+    print("Loading walk-forward 5-day return predictions...")
     df = pd.read_csv(PREDICTIONS_PATH)
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").reset_index(drop=True)
@@ -56,20 +53,19 @@ def main():
     required = ["Future_Return", "Predicted_Return", "Regime", "Volatility_20"]
     for col in required:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-
     df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=required).reset_index(drop=True)
-    print(f"Rows used: {len(df)}")
 
+    print(f"Rows used: {len(df)}")
     df["Desired_Position"] = df.apply(position_size, axis=1)
 
-    # Prediction made at today's close is executed for the next session.
+    # Signal at t is acted on at the next available observation.
+    # The five-day target is kept as the realised forward outcome.
     df["Position"] = df["Desired_Position"].shift(1).fillna(0.0)
     df["Market_Return"] = df["Future_Return"]
     df["Strategy_Return"] = df["Position"] * df["Market_Return"]
     df["Trade"] = df["Position"].diff().abs().fillna(df["Position"].abs())
     df["Transaction_Cost"] = df["Trade"] * TRANSACTION_COST
     df["Strategy_Return_After_Cost"] = df["Strategy_Return"] - df["Transaction_Cost"]
-
     df["Strategy_Equity"] = INITIAL_CAPITAL * (1 + df["Strategy_Return_After_Cost"]).cumprod()
     df["Buy_Hold_Equity"] = INITIAL_CAPITAL * (1 + df["Market_Return"]).cumprod()
 
@@ -78,7 +74,7 @@ def main():
 
     active = df[df["Desired_Position"] > 0]
     print("\n" + "=" * 50)
-    print("RISK-ADJUSTED RETURN BACKTEST COMPLETE")
+    print("RISK-ADJUSTED 5-DAY RETURN BACKTEST COMPLETE")
     print("=" * 50)
     print(f"Eligible long signals: {len(active)}")
     print(f"Final Strategy Value: ₹{df['Strategy_Equity'].iloc[-1]:,.2f}")
