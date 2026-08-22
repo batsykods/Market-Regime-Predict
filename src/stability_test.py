@@ -15,7 +15,8 @@ def main():
     print("TEMPORAL PREDICTION STABILITY")
     print("=" * 72)
     rows = []
-    for i, g in enumerate(chunks, 1):
+    for i, idx in enumerate(chunks, 1):
+        g = df.iloc[idx] if not isinstance(idx, pd.DataFrame) else idx
         actual = g["Future_Return"]
         pred = g["Predicted_Return"]
         rows.append({
