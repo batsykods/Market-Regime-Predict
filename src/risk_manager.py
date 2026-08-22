@@ -7,6 +7,8 @@ OUTPUT_PATH = "data/processed/risk_adjusted_backtest.csv"
 INITIAL_CAPITAL = 100000
 TRANSACTION_COST = 0.001
 HOLDING_DAYS = 5
+PREDICTION_QUANTILE = 0.70
+RISK_QUANTILE = 0.65
 
 
 def position_size(row, prediction_cutoff, risk_cutoff):
@@ -57,28 +59,23 @@ def main():
         df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=required).reset_index(drop=True)
 
-    # Calibrate thresholds using only predictions available before each signal.
-    # The first 20% of the walk-forward sample is used as a warm-up period.
+    # Every threshold uses only predictions available before the current signal.
     prediction_cutoffs = np.full(len(df), np.nan)
     risk_cutoffs = np.full(len(df), np.nan)
     warmup = max(50, int(len(df) * 0.20))
-
     risk_ratio = df["Predicted_Return"] / (df["Volatility_20"] * np.sqrt(HOLDING_DAYS))
 
-    for i in range(len(df)):
-        if i < warmup:
-            continue
-        prediction_cutoffs[i] = df.loc[:i - 1, "Predicted_Return"].quantile(0.80)
-        risk_cutoffs[i] = risk_ratio.loc[:i - 1].quantile(0.70)
+    for i in range(warmup, len(df)):
+        prediction_cutoffs[i] = df.loc[:i - 1, "Predicted_Return"].quantile(PREDICTION_QUANTILE)
+        risk_cutoffs[i] = risk_ratio.loc[:i - 1].quantile(RISK_QUANTILE)
 
-    df["Prediction_Cutoff"] = pd.Series(prediction_cutoffs)
-    df["Risk_Cutoff"] = pd.Series(risk_cutoffs)
+    df["Prediction_Cutoff"] = prediction_cutoffs
+    df["Risk_Cutoff"] = risk_cutoffs
 
     valid = df["Prediction_Cutoff"].notna() & df["Risk_Cutoff"].notna()
     df["Desired_Position"] = 0.0
     df.loc[valid, "Desired_Position"] = df.loc[valid].apply(
-        lambda r: position_size(r, r["Prediction_Cutoff"], r["Risk_Cutoff"]),
-        axis=1,
+        lambda r: position_size(r, r["Prediction_Cutoff"], r["Risk_Cutoff"]), axis=1
     )
 
     positions = np.zeros(len(df), dtype=float)
@@ -114,6 +111,8 @@ def main():
     print("\n" + "=" * 50)
     print("CALIBRATED 5-DAY PERSISTENT BACKTEST COMPLETE")
     print("=" * 50)
+    print(f"Prediction quantile: {PREDICTION_QUANTILE:.0%}")
+    print(f"Risk quantile: {RISK_QUANTILE:.0%}")
     print(f"Eligible long signals: {len(active)}")
     print(f"Final Strategy Value: ₹{df['Strategy_Equity'].iloc[-1]:,.2f}")
     print(f"Final Buy & Hold Value: ₹{df['Buy_Hold_Equity'].iloc[-1]:,.2f}")
