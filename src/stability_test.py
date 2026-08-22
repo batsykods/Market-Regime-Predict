@@ -6,7 +6,7 @@ INPUT = "data/processed/walk_forward_results.csv"
 
 def main():
     df = pd.read_csv(INPUT).replace([np.inf, -np.inf], np.nan)
-    df = df.dropna(subset=["Predicted_Return", "Future_Return"])
+    df = df.dropna(subset=["Predicted_Return", "Future_Return", "Date"])
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").reset_index(drop=True)
 
@@ -16,20 +16,23 @@ def main():
     print("=" * 72)
     rows = []
     for i, g in enumerate(chunks, 1):
+        actual = g["Future_Return"]
+        pred = g["Predicted_Return"]
         rows.append({
             "Quarter": i,
             "Start": g["Date"].iloc[0].date(),
             "End": g["Date"].iloc[-1].date(),
             "Samples": len(g),
-            "Mean_Prediction": g["Predicted_Return"].mean(),
-            "Mean_Actual": g["Future_Return"].mean(),
-            "MAE": (g["Future_Return"] - g["Predicted_Return"]).abs().mean(),
-            "Direction_Accuracy": (np.sign(g["Future_Return"]) == np.sign(g["Predicted_Return"])).mean(),
-            "Spearman": g["Predicted_Return"].corr(g["Future_Return"], method="spearman"),
+            "Mean_Prediction": pred.mean(),
+            "Mean_Actual": actual.mean(),
+            "MAE": (actual - pred).abs().mean(),
+            "Direction_Accuracy": (np.sign(actual) == np.sign(pred)).mean(),
+            "Spearman": pred.corr(actual, method="spearman"),
         })
-    print(pd.DataFrame(rows).to_string(index=False, float_format=lambda x: f"{x:.6f}"))
+    result = pd.DataFrame(rows)
+    print(result.to_string(index=False, float_format=lambda x: f"{x:.6f}"))
 
-    corr = pd.Series([r["Spearman"] for r in rows])
+    corr = result["Spearman"]
     print(f"\nPositive-correlation periods: {(corr > 0).sum()}/{len(corr)}")
     print(f"Median period correlation: {corr.median():.4f}")
     print(f"Correlation range: {corr.min():.4f} to {corr.max():.4f}")
