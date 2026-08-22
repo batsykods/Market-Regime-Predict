@@ -1,204 +1,52 @@
 import pandas as pd
 import streamlit as st
-
-
-PREDICTIONS_PATH = (
-    "data/processed/walk_forward_results.csv"
-)
-
-BACKTEST_PATH = (
-    "data/processed/risk_adjusted_backtest.csv"
-)
-
-
-st.set_page_config(
-    page_title="Stock Regime & Signal Detection",
-    layout="wide"
-)
-
-
-st.title(
-    "Stock Market Regime & Signal Detection"
-)
-
-
-# Load data
-predictions = pd.read_csv(
-    PREDICTIONS_PATH
-)
-
-backtest = pd.read_csv(
-    BACKTEST_PATH
-)
-
-
-predictions["Date"] = pd.to_datetime(
-    predictions["Date"]
-)
-
-backtest["Date"] = pd.to_datetime(
-    backtest["Date"]
-)
-
-
-# Latest prediction
-latest = predictions.iloc[-1]
-
-
-signal_map = {
-    0: "HOLD",
-    1: "BUY",
-    2: "SELL"
-}
-
-
-signal = signal_map[
-    int(latest["Prediction"])
-]
-
-
-# --------------------------------------------------
-# Current Signal
-# --------------------------------------------------
-
-st.header("Current Market Signal")
-
-
-col1, col2, col3, col4 = st.columns(4)
-
-
-with col1:
-
-    st.metric(
-        "Signal",
-        signal
-    )
-
-
-with col2:
-
-    st.metric(
-        "Regime",
-        int(latest["Regime"])
-    )
-
-
-with col3:
-
-    st.metric(
-        "Buy Probability",
-        f"{latest['BUY_Probability']:.2%}"
-    )
-
-
-with col4:
-
-    st.metric(
-        "Sell Probability",
-        f"{latest['SELL_Probability']:.2%}"
-    )
-
-
-# --------------------------------------------------
-# Equity Curve
-# --------------------------------------------------
-
-st.header("Strategy Performance")
-
-
-chart_data = backtest.set_index(
-    "Date"
-)[
-    [
-        "Strategy_Equity",
-        "Buy_Hold_Equity"
-    ]
-]
-
-st.line_chart(
-    chart_data
-)
-
-
-# --------------------------------------------------
-# Drawdown
-# --------------------------------------------------
-
-st.header("Strategy Drawdown")
-
-
-rolling_max = (
-    backtest["Strategy_Equity"]
-    .cummax()
-)
-
-backtest["Drawdown"] = (
-    backtest["Strategy_Equity"]
-    / rolling_max
-    - 1
-)
-
-drawdown_data = backtest.set_index(
-    "Date"
-)[
-    ["Drawdown"]
-]
-
-st.line_chart(
-    drawdown_data
-)
-
-
-# --------------------------------------------------
-# Position Exposure
-# --------------------------------------------------
-
-st.header("Position Exposure")
-
-
-exposure_data = backtest.set_index(
-    "Date"
-)[
-    ["Position"]
-]
-
-st.line_chart(
-    exposure_data
-)
-
-
-# --------------------------------------------------
-# Recent Predictions
-# --------------------------------------------------
-
-st.header("Recent Predictions")
-
-
-recent = predictions[
-    [
-        "Date",
-        "Regime",
-        "Prediction",
-        "BUY_Probability",
-        "HOLD_Probability",
-        "SELL_Probability"
-    ]
-].tail(20).copy()
-
-
-recent["Prediction"] = (
-    recent["Prediction"]
-    .map(signal_map)
-)
-
-
-st.dataframe(
-    recent,
-    use_container_width=True
-)
-
-
-st.caption(
-    "Model outputs are historical research results "
-    "and are not financial advice."
-)
+from src.live_signal import get_snapshot
+
+st.set_page_config(page_title="NIFTY ML Signal Dashboard", layout="wide")
+st.title("NIFTY 50 ML Signal Dashboard")
+st.caption("Daily-bar live inference. Paper trading only; no broker orders are placed.")
+
+@st.cache_data(ttl=300)
+def load_snapshot():
+    return get_snapshot()
+
+snapshot = load_snapshot()
+
+c1, c2, c3, c4 = st.columns(4)
+with c1: st.metric("Signal", snapshot["signal"])
+with c2: st.metric("NIFTY", f"₹{snapshot['price']:,.2f}")
+with c3: st.metric("Regime", str(snapshot["regime"]))
+with c4: st.metric("5D Expected Return", f"{snapshot['predicted_return']:.2%}")
+
+st.subheader("Trade Plan")
+a, b, c, d = st.columns(4)
+with a: st.metric("Position", f"{snapshot['position_size']:.2%}")
+with b: st.metric("Target", f"₹{snapshot['target_price']:,.2f}")
+with c: st.metric("Stop", f"₹{snapshot['stop_price']:,.2f}")
+with d: st.metric("Expected Profit", f"₹{snapshot['expected_profit']:,.2f}")
+
+st.write(f"Prediction percentile: **{snapshot['prediction_percentile']:.1%}**")
+st.write(f"Risk ratio: **{snapshot['risk_ratio']:.3f}** | Risk cutoff: **{snapshot['risk_cutoff']:.3f}**")
+st.write(f"Signal cutoff: **{snapshot['prediction_cutoff']:.3%}** | Holding window: **{snapshot['holding_days']} trading days**")
+st.write(f"Volatility (20D): **{snapshot['volatility_20']:.2%}** | ATR(14): **₹{snapshot['atr_14']:,.2f}**")
+st.write(f"Latest market bar: **{snapshot['timestamp']}**")
+
+st.divider()
+st.subheader("Backtest Performance")
+try:
+    backtest = pd.read_csv("data/processed/risk_adjusted_backtest.csv")
+    backtest["Date"] = pd.to_datetime(backtest["Date"])
+    cols = [c for c in ["Strategy_Equity", "Buy_Hold_Equity"] if c in backtest.columns]
+    if cols:
+        st.line_chart(backtest.set_index("Date")[cols])
+except FileNotFoundError:
+    st.info("Run the backtest pipeline first.")
+
+st.subheader("Paper Trade Ledger")
+try:
+    ledger = pd.read_csv("data/processed/paper_trades.csv")
+    st.dataframe(ledger.tail(25), use_container_width=True)
+except FileNotFoundError:
+    st.info("No paper-trade snapshots yet. Run: python -m src.paper_trader")
+
+st.caption("Research/paper-trading system. Predictions are estimates, not guaranteed returns or financial advice.")
