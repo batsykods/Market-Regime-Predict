@@ -7,8 +7,8 @@ OUTPUT_PATH = "data/processed/risk_adjusted_backtest.csv"
 INITIAL_CAPITAL = 100000
 TRANSACTION_COST = 0.001
 HOLDING_DAYS = 5
-PREDICTION_QUANTILE = 0.70
-RISK_QUANTILE = 0.65
+PREDICTION_QUANTILE = 0.65
+RISK_QUANTILE = 0.60
 
 
 def position_size(row, prediction_cutoff, risk_cutoff):
@@ -59,7 +59,6 @@ def main():
         df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=required).reset_index(drop=True)
 
-    # Every threshold uses only predictions available before the current signal.
     prediction_cutoffs = np.full(len(df), np.nan)
     risk_cutoffs = np.full(len(df), np.nan)
     warmup = max(50, int(len(df) * 0.20))
