@@ -1,5 +1,13 @@
+import os
+import sys
 import pandas as pd
 import streamlit as st
+
+# Make repository root importable when Streamlit executes src/dashboard.py directly.
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
 from src.live_signal import get_snapshot
 
 st.set_page_config(page_title="NIFTY ML Signal Dashboard", layout="wide")
@@ -18,7 +26,6 @@ with c2: st.metric("NIFTY", f"₹{snapshot['price']:,.2f}")
 with c3: st.metric("Regime", str(snapshot["regime"]))
 with c4: st.metric("5D Expected Return", f"{snapshot['predicted_return']:.2%}")
 
-st.subheader("Trade Plan")
 a, b, c, d = st.columns(4)
 with a: st.metric("Position", f"{snapshot['position_size']:.2%}")
 with b: st.metric("Target", f"₹{snapshot['target_price']:,.2f}")
