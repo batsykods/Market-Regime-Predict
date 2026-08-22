@@ -31,7 +31,6 @@ def position_size(row, prediction_cutoff, risk_cutoff):
     else:
         position = 0.60
 
-    # Regime-aware sizing, not hard filtering.
     if regime == 0:
         position *= 0.60
     elif regime == 2:
@@ -58,16 +57,28 @@ def main():
         df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=required).reset_index(drop=True)
 
-    prediction_cutoff = float(df["Predicted_Return"].quantile(0.80))
+    # Calibrate thresholds using only predictions available before each signal.
+    # The first 20% of the walk-forward sample is used as a warm-up period.
+    prediction_cutoffs = np.full(len(df), np.nan)
+    risk_cutoffs = np.full(len(df), np.nan)
+    warmup = max(50, int(len(df) * 0.20))
+
     risk_ratio = df["Predicted_Return"] / (df["Volatility_20"] * np.sqrt(HOLDING_DAYS))
-    risk_cutoff = float(risk_ratio.quantile(0.70))
 
-    print(f"Rows used: {len(df)}")
-    print(f"Prediction cutoff (80th percentile): {prediction_cutoff:.6f}")
-    print(f"Risk cutoff (70th percentile): {risk_cutoff:.4f}")
+    for i in range(len(df)):
+        if i < warmup:
+            continue
+        prediction_cutoffs[i] = df.loc[:i - 1, "Predicted_Return"].quantile(0.80)
+        risk_cutoffs[i] = risk_ratio.loc[:i - 1].quantile(0.70)
 
-    df["Desired_Position"] = df.apply(
-        position_size, axis=1, args=(prediction_cutoff, risk_cutoff)
+    df["Prediction_Cutoff"] = pd.Series(prediction_cutoffs)
+    df["Risk_Cutoff"] = pd.Series(risk_cutoffs)
+
+    valid = df["Prediction_Cutoff"].notna() & df["Risk_Cutoff"].notna()
+    df["Desired_Position"] = 0.0
+    df.loc[valid, "Desired_Position"] = df.loc[valid].apply(
+        lambda r: position_size(r, r["Prediction_Cutoff"], r["Risk_Cutoff"]),
+        axis=1,
     )
 
     positions = np.zeros(len(df), dtype=float)
@@ -77,15 +88,12 @@ def main():
     for i in range(len(df)):
         if i == 0:
             continue
-
         signal = df.loc[i - 1, "Desired_Position"]
-
         if signal > 0:
             active_position = max(active_position, signal)
             remaining = HOLDING_DAYS
         elif remaining > 0:
             remaining -= 1
-
         positions[i] = active_position if remaining > 0 else 0.0
         if remaining == 0:
             active_position = 0.0
@@ -104,7 +112,7 @@ def main():
 
     active = df[df["Desired_Position"] > 0]
     print("\n" + "=" * 50)
-    print("REGIME-AWARE 5-DAY PERSISTENT BACKTEST COMPLETE")
+    print("CALIBRATED 5-DAY PERSISTENT BACKTEST COMPLETE")
     print("=" * 50)
     print(f"Eligible long signals: {len(active)}")
     print(f"Final Strategy Value: ₹{df['Strategy_Equity'].iloc[-1]:,.2f}")
