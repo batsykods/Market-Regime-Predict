@@ -22,11 +22,6 @@ def position_size(row, prediction_cutoff, risk_cutoff):
     if edge < risk_cutoff:
         return 0.0
 
-    # Regime 0 is the historically defensive/negative regime.
-    # Regimes 1 and 2 are allowed to carry positive exposure.
-    if regime == 0:
-        return 0.0
-
     if edge < 0.50:
         position = 0.15
     elif edge < 0.75:
@@ -36,7 +31,10 @@ def position_size(row, prediction_cutoff, risk_cutoff):
     else:
         position = 0.60
 
-    if regime == 2:
+    # Regime-aware sizing, not hard filtering.
+    if regime == 0:
+        position *= 0.60
+    elif regime == 2:
         position *= 0.85
 
     if volatility > 0.30:
