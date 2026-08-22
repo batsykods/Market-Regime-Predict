@@ -10,17 +10,20 @@ def main():
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").reset_index(drop=True)
 
-    chunks = np.array_split(df, 4)
+    n = len(df)
+    boundaries = np.linspace(0, n, 5, dtype=int)
+
     print("\n" + "=" * 72)
     print("TEMPORAL PREDICTION STABILITY")
     print("=" * 72)
+
     rows = []
-    for i, idx in enumerate(chunks, 1):
-        g = df.iloc[idx] if not isinstance(idx, pd.DataFrame) else idx
+    for i in range(4):
+        g = df.iloc[boundaries[i]:boundaries[i + 1]].copy()
         actual = g["Future_Return"]
         pred = g["Predicted_Return"]
         rows.append({
-            "Quarter": i,
+            "Quarter": i + 1,
             "Start": g["Date"].iloc[0].date(),
             "End": g["Date"].iloc[-1].date(),
             "Samples": len(g),
@@ -30,6 +33,7 @@ def main():
             "Direction_Accuracy": (np.sign(actual) == np.sign(pred)).mean(),
             "Spearman": pred.corr(actual, method="spearman"),
         })
+
     result = pd.DataFrame(rows)
     print(result.to_string(index=False, float_format=lambda x: f"{x:.6f}"))
 
