@@ -7,8 +7,10 @@ OUTPUT_PATH = "data/processed/risk_adjusted_backtest.csv"
 INITIAL_CAPITAL = 100000
 TRANSACTION_COST = 0.001
 HOLDING_DAYS = 5
-PREDICTION_QUANTILE = 0.65
-RISK_QUANTILE = 0.60
+PREDICTION_QUANTILE = 0.70
+RISK_QUANTILE = 0.65
+
+REGIME_MULTIPLIERS = {0: 1.00, 1: 0.25, 2: 0.70}
 
 
 def position_size(row, prediction_cutoff, risk_cutoff):
@@ -33,10 +35,7 @@ def position_size(row, prediction_cutoff, risk_cutoff):
     else:
         position = 0.60
 
-    if regime == 0:
-        position *= 0.60
-    elif regime == 2:
-        position *= 0.85
+    position *= REGIME_MULTIPLIERS.get(regime, 0.50)
 
     if volatility > 0.30:
         position *= 0.25
@@ -70,9 +69,9 @@ def main():
 
     df["Prediction_Cutoff"] = prediction_cutoffs
     df["Risk_Cutoff"] = risk_cutoffs
+    df["Desired_Position"] = 0.0
 
     valid = df["Prediction_Cutoff"].notna() & df["Risk_Cutoff"].notna()
-    df["Desired_Position"] = 0.0
     df.loc[valid, "Desired_Position"] = df.loc[valid].apply(
         lambda r: position_size(r, r["Prediction_Cutoff"], r["Risk_Cutoff"]), axis=1
     )
@@ -81,9 +80,7 @@ def main():
     active_position = 0.0
     remaining = 0
 
-    for i in range(len(df)):
-        if i == 0:
-            continue
+    for i in range(1, len(df)):
         signal = df.loc[i - 1, "Desired_Position"]
         if signal > 0:
             active_position = max(active_position, signal)
@@ -108,10 +105,11 @@ def main():
 
     active = df[df["Desired_Position"] > 0]
     print("\n" + "=" * 50)
-    print("CALIBRATED 5-DAY PERSISTENT BACKTEST COMPLETE")
+    print("REGIME-SPECIFIC CALIBRATED 5-DAY BACKTEST COMPLETE")
     print("=" * 50)
     print(f"Prediction quantile: {PREDICTION_QUANTILE:.0%}")
     print(f"Risk quantile: {RISK_QUANTILE:.0%}")
+    print(f"Regime multipliers: {REGIME_MULTIPLIERS}")
     print(f"Eligible long signals: {len(active)}")
     print(f"Final Strategy Value: ₹{df['Strategy_Equity'].iloc[-1]:,.2f}")
     print(f"Final Buy & Hold Value: ₹{df['Buy_Hold_Equity'].iloc[-1]:,.2f}")
